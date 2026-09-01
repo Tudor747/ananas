@@ -1,0 +1,2 @@
+"""Authenticated API route factories."""
+

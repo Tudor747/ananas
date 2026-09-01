@@ -1,0 +1,25 @@
+[Unit]
+Description=Pi-OT Security Probe local engineering API
+After=network.target
+
+[Service]
+Type=simple
+User=pi-ot-probe
+Group=pi-ot-probe
+WorkingDirectory=/opt/pi-ot-probe
+EnvironmentFile=/etc/pi-ot-probe/environment
+ExecStart=/opt/pi-ot-probe/.venv/bin/pi-ot-probe serve
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+KillSignal=SIGINT
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/pi-ot-probe
+
+[Install]
+WantedBy=multi-user.target
+

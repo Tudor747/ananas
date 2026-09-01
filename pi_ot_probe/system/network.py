@@ -1,0 +1,2 @@
+"""Network configuration adapter boundary."""
+

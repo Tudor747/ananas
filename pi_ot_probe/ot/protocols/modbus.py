@@ -1,0 +1,3 @@
+PROTOCOL = "Modbus/TCP"
+DEFAULT_PORT = 502
+

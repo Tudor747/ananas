@@ -1,0 +1,2 @@
+"""Safe OT protocol identification."""
+

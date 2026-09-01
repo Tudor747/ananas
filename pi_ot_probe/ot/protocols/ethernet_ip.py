@@ -1,0 +1,3 @@
+PROTOCOL = "EtherNet/IP"
+DEFAULT_PORT = 44818
+

@@ -1,0 +1,2 @@
+"""Service health adapter boundary."""
+
