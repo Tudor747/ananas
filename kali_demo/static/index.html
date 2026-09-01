@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pi-OT Probe // Kali Demo</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">PI-OT SECURITY PROBE</p>
+      <h1>Kali simulation console</h1>
+    </div>
+    <div class="safe-badge"><span></span> SIMULATION ONLY · NO NETWORK TRAFFIC</div>
+  </header>
+
+  <main>
+    <section class="hero panel">
+      <div>
+        <p class="eyebrow">QUICK AUDIT</p>
+        <h2>Observe the complete analysis pipeline without touching a network.</h2>
+        <p class="muted">Synthetic assets flow through discovery, risk analysis, findings, change tracking, audit logging, and SQLite persistence.</p>
+      </div>
+      <div class="controls">
+        <label for="scenario">Scenario</label>
+        <select id="scenario">
+          <option value="changed">Changed site</option>
+          <option value="baseline">Quiet baseline</option>
+        </select>
+        <button id="run-button" type="button">Run quick audit</button>
+      </div>
+    </section>
+
+    <div id="status" class="status" role="status">Ready. Run a synthetic audit to populate the dashboard.</div>
+
+    <section class="metrics" aria-label="Audit metrics">
+      <article><span id="metric-assets">0</span><small>Assets</small></article>
+      <article><span id="metric-ot">0</span><small>OT devices</small></article>
+      <article><span id="metric-findings">0</span><small>Findings</small></article>
+      <article><span id="metric-changes">0</span><small>Changes</small></article>
+    </section>
+
+    <section class="grid">
+      <article class="panel wide">
+        <div class="section-heading"><div><p class="eyebrow">INVENTORY</p><h2>Assets</h2></div><span id="asset-count" class="counter">0</span></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Address</th><th>Identity</th><th>Type</th><th>Ports / protocols</th><th>Risk</th></tr></thead>
+            <tbody id="assets-body"></tbody>
+          </table>
+        </div>
+      </article>
+
+      <article class="panel">
+        <div class="section-heading"><div><p class="eyebrow">PRIORITY</p><h2>Findings</h2></div></div>
+        <div id="findings" class="stack"></div>
+      </article>
+
+      <article class="panel">
+        <div class="section-heading"><div><p class="eyebrow">BASELINE</p><h2>Observed changes</h2></div></div>
+        <div id="changes" class="stack"></div>
+      </article>
+
+      <article class="panel">
+        <div class="section-heading"><div><p class="eyebrow">RADIO</p><h2>Wi-Fi access points</h2></div></div>
+        <div id="wifi" class="stack"></div>
+      </article>
+
+      <article class="panel">
+        <div class="section-heading"><div><p class="eyebrow">HISTORY</p><h2>Recent scans</h2></div></div>
+        <div id="scans" class="stack"></div>
+      </article>
+    </section>
+  </main>
+
+  <footer>LOCALHOST DEMO · INDUSTRIAL-SAFE PROFILE · SYNTHETIC EVIDENCE</footer>
+  <script src="/static/app.js" defer></script>
+</body>
+</html>
