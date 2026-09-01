@@ -3,36 +3,35 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Pi-OT Probe // Kali Demo</title>
+  <title>Pi-OT Probe // Kali Discovery</title>
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
   <header class="topbar">
     <div>
       <p class="eyebrow">PI-OT SECURITY PROBE</p>
-      <h1>Kali simulation console</h1>
+      <h1>Kali discovery console</h1>
     </div>
-    <div class="safe-badge"><span></span> SIMULATION ONLY · NO NETWORK TRAFFIC</div>
+    <div class="safe-badge"><span></span> SAFE DISCOVERY · EXPLICIT AUTHORIZATION</div>
   </header>
 
   <main>
     <section class="hero panel">
       <div>
         <p class="eyebrow">QUICK AUDIT</p>
-        <h2>Observe the complete analysis pipeline without touching a network.</h2>
-        <p class="muted">Synthetic assets flow through discovery, risk analysis, findings, change tracking, audit logging, and SQLite persistence.</p>
+        <h2>Discover devices on a network you are authorized to assess.</h2>
+        <p class="muted">Level 1 host discovery only. The app uses a maximum of 10 probes per second and performs no port scan, version detection, scripts, exploitation, or credential checks.</p>
       </div>
       <div class="controls">
-        <label for="scenario">Scenario</label>
-        <select id="scenario">
-          <option value="changed">Changed site</option>
-          <option value="baseline">Quiet baseline</option>
-        </select>
-        <button id="run-button" type="button">Run quick audit</button>
+        <label for="network">Local private network</label>
+        <select id="network" disabled><option>Detecting interfaces…</option></select>
+        <label class="authorization"><input id="authorized" type="checkbox"> I am authorized to assess this network</label>
+        <button id="run-button" type="button" disabled>Discover devices</button>
+        <button id="cancel-button" class="secondary" type="button" disabled>Cancel scan</button>
       </div>
     </section>
 
-    <div id="status" class="status" role="status">Ready. Run a synthetic audit to populate the dashboard.</div>
+    <div id="status" class="status" role="status">Detecting safe local network targets…</div>
 
     <section class="metrics" aria-label="Audit metrics">
       <article><span id="metric-assets">0</span><small>Assets</small></article>
@@ -74,7 +73,7 @@
     </section>
   </main>
 
-  <footer>LOCALHOST DEMO · INDUSTRIAL-SAFE PROFILE · SYNTHETIC EVIDENCE</footer>
+  <footer>LOCALHOST APP · LEVEL 1 DISCOVERY · INDUSTRIAL-SAFE RATE LIMIT</footer>
   <script src="/static/app.js" defer></script>
 </body>
 </html>

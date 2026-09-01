@@ -11,6 +11,11 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 1
 fi
 
+if ! command -v nmap >/dev/null 2>&1; then
+  echo "Nmap is required for real discovery. Install it with: sudo apt install nmap" >&2
+  exit 1
+fi
+
 if [[ ! -x "$venv_dir/bin/python" ]]; then
   echo "Creating Kali demo virtual environment..."
   python3 -m venv "$venv_dir"
@@ -25,4 +30,3 @@ exec "$venv_dir/bin/python" -m uvicorn kali_demo.app:app \
   --app-dir "$project_root" \
   --host 127.0.0.1 \
   --port "$port"
-

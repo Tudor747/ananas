@@ -73,7 +73,7 @@ function renderFindings(findings) {
 function renderChanges(changes) {
   const root = byId("changes");
   root.replaceChildren();
-  if (!changes.length) return root.append(empty("Baseline scenario has no synthetic changes."));
+  if (!changes.length) return root.append(empty("No baseline changes recorded."));
   changes.slice(0, 8).forEach((change) => {
     const item = text("div", "", "item");
     const head = text("div", "", "item-head");
@@ -131,31 +131,80 @@ async function refresh() {
 
 async function runAudit() {
   const button = byId("run-button");
+  const cancelButton = byId("cancel-button");
   const status = byId("status");
   button.disabled = true;
+  cancelButton.disabled = false;
   status.className = "status running";
-  status.textContent = "Running offline simulation… no packets are being transmitted.";
+  status.textContent = "Running rate-limited host discovery… press Cancel to abort.";
   try {
-    const response = await fetch("/api/run", {
+    const response = await fetch("/api/real/run", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({scenario: byId("scenario").value}),
+      body: JSON.stringify({
+        target: byId("network").value,
+        authorized: byId("authorized").checked,
+      }),
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.detail || `Audit failed (${response.status})`);
     await refresh();
     status.className = "status";
-    status.textContent = `Completed ${result.scenario} simulation: ${result.assets} assets and ${result.findings} findings. Scan ${result.scan_id.slice(0, 8)}.`;
+    status.textContent = result.cancelled
+      ? `Scan ${result.scan_id.slice(0, 8)} was cancelled.`
+      : `Discovery complete on ${result.target}: ${result.assets} devices observed. Scan ${result.scan_id.slice(0, 8)}.`;
   } catch (error) {
     status.className = "status error";
     status.textContent = error.message;
   } finally {
-    button.disabled = false;
+    button.disabled = !byId("authorized").checked || !byId("network").value;
+    cancelButton.disabled = true;
   }
 }
 
+async function loadNetworks() {
+  const selector = byId("network");
+  const status = byId("status");
+  const response = await fetch("/api/networks");
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.detail || "Could not inspect local interfaces.");
+  selector.replaceChildren();
+  if (!result.nmap_available) {
+    throw new Error("Nmap is not installed. Run: sudo apt install nmap");
+  }
+  if (!result.networks.length) {
+    throw new Error("No active RFC1918 IPv4 interface was found.");
+  }
+  result.networks.forEach((network) => {
+    const option = document.createElement("option");
+    option.value = network.safe_target;
+    option.textContent = `${network.interface} · ${network.safe_target} · this host ${network.address}`;
+    selector.append(option);
+  });
+  selector.disabled = false;
+  status.className = "status";
+  status.textContent = "Ready. Select a local network and confirm authorization.";
+}
+
+async function cancelAudit() {
+  const response = await fetch("/api/cancel", {method: "POST"});
+  const result = await response.json();
+  byId("status").textContent = result.cancel_requested
+    ? "Cancellation requested. Waiting for Nmap to stop…"
+    : "No scan is currently running.";
+}
+
 byId("run-button").addEventListener("click", runAudit);
+byId("cancel-button").addEventListener("click", cancelAudit);
+byId("authorized").addEventListener("change", () => {
+  byId("run-button").disabled = !byId("authorized").checked || byId("network").disabled;
+});
 refresh().catch((error) => {
+  const status = byId("status");
+  status.className = "status error";
+  status.textContent = error.message;
+});
+loadNetworks().catch((error) => {
   const status = byId("status");
   status.className = "status error";
   status.textContent = error.message;
