@@ -80,5 +80,7 @@ It binds to `127.0.0.1:8080` by default. Send the token as
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for components, data flow, scan levels,
 hardware abstraction, persistence, security controls, and phased boundaries.
-Real network probing, GPIO, packet capture, Wi-Fi scanning, and OT protocol
-traffic are intentionally deferred until the foundation is reviewed.
+The separate `kali_demo/` engineering console now contains the V2/V3 preview:
+cross-platform real host discovery, confirmed single-host service verification,
+site baselines, change history, Wi-Fi AP inventory, and JSON/CSV reports. GPIO,
+packet capture, and active OT protocol handshakes remain deferred.

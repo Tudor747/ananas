@@ -105,6 +105,12 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         plugin TEXT NOT NULL, asset_id INTEGER REFERENCES assets(id),
         result_json TEXT NOT NULL, created_at TEXT NOT NULL
     )""",
+    """CREATE TABLE IF NOT EXISTS scan_assets (
+        scan_id TEXT NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
+        asset_id INTEGER NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+        observed_at TEXT NOT NULL,
+        PRIMARY KEY(scan_id, asset_id)
+    )""",
     """CREATE TABLE IF NOT EXISTS findings (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         scan_id TEXT NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
@@ -158,5 +164,6 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
     )""",
     "CREATE INDEX IF NOT EXISTS idx_assets_site ON assets(site_id)",
     "CREATE INDEX IF NOT EXISTS idx_findings_scan ON findings(scan_id)",
+    "CREATE INDEX IF NOT EXISTS idx_scan_assets_asset ON scan_assets(asset_id)",
     "CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON audit_log(timestamp)",
 )

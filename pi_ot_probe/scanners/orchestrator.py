@@ -69,6 +69,7 @@ class ScanOrchestrator:
                 if progress.asset is not None:
                     asset_findings = self.risk_engine.evaluate(progress.asset)
                     asset_id = self.repository.upsert_asset(site_id, progress.asset)
+                    self.repository.link_scan_asset(scan.id, asset_id, progress.asset.last_seen)
                     for finding in asset_findings:
                         self.repository.add_finding(scan.id, asset_id, finding)
                     assets.append(progress.asset)

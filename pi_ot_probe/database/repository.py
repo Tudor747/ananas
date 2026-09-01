@@ -93,9 +93,14 @@ class Repository:
                     confidence, risk_score, source, first_seen, last_seen
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(site_id, ip) DO UPDATE SET
-                    mac=excluded.mac, hostname=excluded.hostname, vendor=excluded.vendor,
-                    device_type=excluded.device_type, criticality=excluded.criticality,
-                    confidence=excluded.confidence, risk_score=excluded.risk_score,
+                    mac=COALESCE(excluded.mac, assets.mac),
+                    hostname=COALESCE(excluded.hostname, assets.hostname),
+                    vendor=COALESCE(excluded.vendor, assets.vendor),
+                    device_type=CASE WHEN excluded.device_type='unknown'
+                        THEN assets.device_type ELSE excluded.device_type END,
+                    criticality=excluded.criticality,
+                    confidence=MAX(excluded.confidence, assets.confidence),
+                    risk_score=MAX(excluded.risk_score, assets.risk_score),
                     source=excluded.source, last_seen=excluded.last_seen""",
                 (
                     site_id, asset.ip, asset.mac, asset.hostname, asset.vendor,
@@ -153,6 +158,14 @@ class Repository:
             finding.id = int(cursor.lastrowid)
             finding.scan_id = scan_id
             return finding.id
+
+    def link_scan_asset(self, scan_id: str, asset_id: int, observed_at: datetime) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """INSERT INTO scan_assets(scan_id, asset_id, observed_at) VALUES (?, ?, ?)
+                ON CONFLICT(scan_id, asset_id) DO UPDATE SET observed_at=excluded.observed_at""",
+                (scan_id, asset_id, observed_at.isoformat()),
+            )
 
     def upsert_access_point(self, site_id: int, access_point: WifiAccessPoint, observed_at: datetime) -> None:
         timestamp = observed_at.isoformat()

@@ -126,12 +126,14 @@ history.
 
 ## Phase boundaries
 
-1. Current: models, schema, scanner/plugin contracts, simulation, Quick Audit,
-   mock LCD, authenticated API skeleton, and tests.
-2. GPIO/LCD drivers plus real local interface/ARP/Nmap adapters with strict
-   subprocess controls.
-3. Wi-Fi discovery, baseline snapshots/comparison, change history, and reports.
+1. Foundation: models, schema, scanner/plugin contracts, simulation, Quick
+   Audit, mock LCD, authenticated API skeleton, and tests.
+2. V2 preview in `kali_demo/`: cross-platform interface detection, real bounded
+   Nmap host discovery, explicitly confirmed single-host service verification,
+   progress/cancellation, contextual exposure findings, and JSON/CSV reports.
+3. V3 preview in `kali_demo/`: named baseline snapshots, scan-to-asset evidence,
+   automatic change comparison, acknowledgement, historical changes, and safe
+   Wi-Fi AP inventory. Raspberry Pi GPIO/LCD drivers remain to be integrated.
 4. Passive-first Modbus, S7, OPC UA, BACnet, and EtherNet/IP identification.
 5. Confirmed, rate-limited verification plugins; safe defaults only.
 6. Signed data-only update packs and rollback.
-

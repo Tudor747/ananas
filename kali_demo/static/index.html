@@ -3,35 +3,35 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Pi-OT Probe // Kali Discovery</title>
+  <title>Pi-OT Probe // Engineering Console</title>
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
   <header class="topbar">
     <div>
       <p class="eyebrow">PI-OT SECURITY PROBE</p>
-      <h1>Kali discovery console</h1>
+      <h1>Discovery and baseline console</h1>
     </div>
-    <div class="safe-badge"><span></span> SAFE DISCOVERY · EXPLICIT AUTHORIZATION</div>
+    <div class="safe-badge"><span></span> SAFE DEFAULTS / EXPLICIT AUTHORIZATION</div>
   </header>
 
   <main>
     <section class="hero panel">
       <div>
-        <p class="eyebrow">QUICK AUDIT</p>
-        <h2>Discover devices on a network you are authorized to assess.</h2>
-        <p class="muted">Level 1 host discovery only. The app uses a maximum of 10 probes per second and performs no port scan, version detection, scripts, exploitation, or credential checks.</p>
+        <p class="eyebrow">V2 REAL DISCOVERY</p>
+        <h2>Inventory a private network you are authorized to assess.</h2>
+        <p class="muted">Host discovery is limited to 10 probes/second. Service verification is optional, targets one selected device, checks only 20 common TCP ports at 5 connections/second, and runs no scripts or version probes.</p>
       </div>
       <div class="controls">
         <label for="network">Local private network</label>
-        <select id="network" disabled><option>Detecting interfaces…</option></select>
+        <select id="network" disabled><option>Detecting interfaces...</option></select>
         <label class="authorization"><input id="authorized" type="checkbox"> I am authorized to assess this network</label>
         <button id="run-button" type="button" disabled>Discover devices</button>
-        <button id="cancel-button" class="secondary" type="button" disabled>Cancel scan</button>
+        <button id="cancel-button" class="secondary" type="button" disabled>Cancel operation</button>
       </div>
     </section>
 
-    <div id="status" class="status" role="status">Detecting safe local network targets…</div>
+    <div id="status" class="status" role="status">Detecting safe local network targets...</div>
 
     <section class="metrics" aria-label="Audit metrics">
       <article><span id="metric-assets">0</span><small>Assets</small></article>
@@ -40,12 +40,27 @@
       <article><span id="metric-changes">0</span><small>Changes</small></article>
     </section>
 
+    <section class="panel action-panel">
+      <div>
+        <p class="eyebrow">V3 MONITORING</p>
+        <h2>Baseline and reporting</h2>
+        <p id="baseline-status" class="muted">No active baseline.</p>
+      </div>
+      <div class="action-controls">
+        <input id="baseline-name" maxlength="100" value="Site baseline" aria-label="Baseline name">
+        <button id="baseline-button" type="button">Create baseline</button>
+        <button id="wifi-button" class="secondary-safe" type="button">Refresh Wi-Fi inventory</button>
+        <a class="button-link" href="/api/reports/site.json">Download JSON</a>
+        <a class="button-link" href="/api/reports/assets.csv">Download CSV</a>
+      </div>
+    </section>
+
     <section class="grid">
       <article class="panel wide">
         <div class="section-heading"><div><p class="eyebrow">INVENTORY</p><h2>Assets</h2></div><span id="asset-count" class="counter">0</span></div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Address</th><th>Identity</th><th>Type</th><th>Ports / protocols</th><th>Risk</th></tr></thead>
+            <thead><tr><th>Address</th><th>Identity</th><th>Type</th><th>Ports / services</th><th>Risk</th><th>Action</th></tr></thead>
             <tbody id="assets-body"></tbody>
           </table>
         </div>
@@ -73,7 +88,7 @@
     </section>
   </main>
 
-  <footer>LOCALHOST APP · LEVEL 1 DISCOVERY · INDUSTRIAL-SAFE RATE LIMIT</footer>
+  <footer>LOCALHOST APP / V2 DISCOVERY / V3 BASELINES / INDUSTRIAL-SAFE LIMITS</footer>
   <script src="/static/app.js" defer></script>
 </body>
 </html>
