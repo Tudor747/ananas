@@ -119,30 +119,29 @@ def parse_nmap_xml(document: str) -> list[Asset]:
         raise RuntimeError("Nmap returned malformed XML") from exc
     assets: list[Asset] = []
     for host in root.findall("host"):
-        status = host.find("status")
-        if status is None or status.get("state") != "up":
+        status_node = host.find("status")
+        if status_node is None or status_node.get("state") != "up":
             continue
         ipv4 = host.find("address[@addrtype='ipv4']")
         if ipv4 is None or not ipv4.get("addr"):
             continue
         mac_node = host.find("address[@addrtype='mac']")
-        hostname_node = host.find("hostnames/hostname")
-        hostname = hostname_node.get("name") if hostname_node is not None else None
+        hostname_nodes = host.findall("hostnames/hostname")
+        hostnames = [
+            {"name": node.get("name", ""), "type": node.get("type", "unknown")}
+            for node in hostname_nodes if node.get("name")
+        ]
+        hostname = hostnames[0]["name"] if hostnames else None
         vendor = mac_node.get("vendor") if mac_node is not None else None
-        device_type = "unknown"
-        identity = f"{hostname or ''} {vendor or ''}".lower()
-        if any(word in identity for word in ("router", "gateway")):
-            device_type = "router"
-        elif any(word in identity for word in ("camera", "hikvision", "axis")):
-            device_type = "camera"
         assets.append(Asset(
             ip=ipv4.get("addr", ""),
             mac=mac_node.get("addr") if mac_node is not None else None,
             hostname=hostname,
             vendor=vendor,
-            device_type=device_type,
-            confidence=0.85 if device_type != "unknown" else 0.55,
             source="nmap-host-discovery",
+            status=status_node.get("state", "unknown"),
+            discovery_reason=status_node.get("reason"),
+            hostnames=hostnames,
         ))
     return assets
 
@@ -158,8 +157,8 @@ def parse_service_xml(document: str, base_asset: Asset) -> Asset:
     for port_node in root.findall("host/ports/port"):
         if port_node.get("protocol") != "tcp":
             continue
-        state = port_node.find("state")
-        if state is None or state.get("state") != "open":
+        state_node = port_node.find("state")
+        if state_node is None or state_node.get("state") != "open":
             continue
         try:
             port = int(port_node.get("portid", ""))
@@ -172,7 +171,18 @@ def parse_service_xml(document: str, base_asset: Asset) -> Asset:
             port=port,
             transport="tcp",
             name=name,
+            product=service_node.get("product") if service_node is not None else None,
+            version=service_node.get("version") if service_node is not None else None,
             evidence="Nmap TCP connect scan reported the port open",
+            state=state_node.get("state", "unknown"),
+            reason=state_node.get("reason"),
+            method=service_node.get("method") if service_node is not None else None,
+            confidence=(int(service_node.get("conf")) if service_node is not None
+                        and service_node.get("conf", "").isdigit() else None),
+            extra_info=service_node.get("extrainfo") if service_node is not None else None,
+            tunnel=service_node.get("tunnel") if service_node is not None else None,
+            cpes=[node.text for node in service_node.findall("cpe") if node.text]
+                if service_node is not None else [],
         ))
     return Asset(
         id=base_asset.id,
@@ -191,6 +201,9 @@ def parse_service_xml(document: str, base_asset: Asset) -> Asset:
         criticality=base_asset.criticality,
         confidence=base_asset.confidence,
         source="nmap-service-verification",
+        status=base_asset.status,
+        discovery_reason=base_asset.discovery_reason,
+        hostnames=list(base_asset.hostnames),
     )
 
 
@@ -307,7 +320,6 @@ class NmapDiscoveryScanner(Scanner):
         arguments = (
             nmap_binary,
             "-sn",
-            "-n",
             "--max-rate", str(self.max_rate),
             "--max-retries", "1",
             "--host-timeout", "10s",

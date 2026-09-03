@@ -2,14 +2,14 @@
 
 ## Scope and principles
 
-This repository is the safe Phase 1 foundation for a Raspberry Pi 5 appliance.
-The only runnable scanner is a deterministic simulation scanner: it sends no
-packets. Real ARP, Nmap, Wi-Fi, packet capture, GPIO, and OT protocol adapters
-are extension points, not hidden or partial implementations.
+This repository contains a Phase 1 foundation plus the runnable V4 local
+inventory application in `kali_demo/`. The application supports bounded Nmap
+host discovery, single-host service checks, managed-mode Wi-Fi inventory,
+baselines, raw exports, and one-request HTTP/HTTPS metadata inspection.
 
 The design is offline-first, evidence-oriented, hardware-independent, and
-conservative around industrial systems. An observed service is reported as
-exposure; it is never called vulnerable without sufficient evidence.
+conservative around industrial systems. It reports observations without risk
+scores, grades, inferred vulnerabilities, or inferred device classifications.
 
 ## Components
 
@@ -18,15 +18,16 @@ Buttons -> UI controller -> Scan orchestrator -> Scanner / plugins
    |              |                 |                  |
   LCD         progress events   safety policy     observations
                                       |
-                           risk + finding analysis
+                          evidence normalization
                                       |
                               SQLite repository
                                       |
                          authenticated local API
 ```
 
-- `core`: storage- and UI-independent `Asset`, `Finding`, `Risk`, `Scan`,
-  protocol, service, Wi-Fi, change, and progress models.
+- `core`: storage- and UI-independent asset, scan, protocol, service, Wi-Fi,
+  change, and progress models. Legacy score fields remain storage-compatible
+  but are not used by active product paths.
 - `config`: environment settings and profile safety policy. INDUSTRIAL defaults
   to passive collection and the lowest request rate.
 - `scanners`: scanner contract, cancellation token, supplemental artifacts, and
@@ -34,10 +35,11 @@ Buttons -> UI controller -> Scan orchestrator -> Scanner / plugins
   never held for the duration of a scan.
 - `simulation`: synthetic site snapshots. The changed scenario demonstrates a
   new device, a removed device, a new PLC port, a duplicate/open AP, PLC/HMI
-  identification, and high-risk OT exposure evidence.
+  identification and repeatable observation changes.
 - `plugins`: explicit in-process registry and an asynchronous plugin contract.
   Update packs cannot add Python modules or register executable code.
-- `analysis`: explainable contextual scoring and user-facing findings.
+- `analysis`: legacy experimental modules retained for compatibility; not
+  invoked by the CLI, engineering API, or V4 browser application.
 - `database`: explicit SQLite schema and a narrow repository boundary.
 - `ui`: hardware-independent LCD and button contracts. `MockLCD` renders an
   exact 16x2 display in any terminal.
@@ -54,14 +56,12 @@ Buttons -> UI controller -> Scan orchestrator -> Scanner / plugins
 3. A short-lived scan record is created before work begins.
 4. The scanner asynchronously yields `ScanProgress` observations and checks its
    cancellation token between operations.
-5. Assets are classified and passed to the local risk engine. The engine uses
-   criticality, exposure, OT relevance, and confidence; it returns both a
-   technical reason and a plain-language explanation.
-6. Parameterized SQLite statements upsert assets and append findings. Auxiliary
+5. Raw observations are normalized without assigning a risk or vulnerability.
+6. Parameterized SQLite statements upsert assets and evidence. Auxiliary
    Wi-Fi and change observations use the same repository boundary.
 7. Completion, cancellation, and failure all finalize the scan and append an
    audit entry. Exceptions are retained and then propagated.
-8. The LCD receives only short progress/finding messages. The authenticated API
+8. The LCD receives only short progress messages. The authenticated API
    exposes detailed stored records to engineers.
 
 ## Scan levels and safety gates
@@ -87,13 +87,13 @@ will implement the same contracts and read pin assignments only from hardware
 configuration. Similarly, `WifiInterface` separates built-in managed-mode Wi-Fi
 from a future USB monitor-mode adapter.
 
-This keeps scanner, database, risk, and UI logic runnable on ordinary Linux,
+This keeps scanner, database, evidence, and UI logic runnable on ordinary Linux,
 macOS, and Windows machines. Hardware import failures cannot break simulation.
 
 ## Persistence model
 
 SQLite tables cover sites, scans, assets, interfaces, ports, services,
-protocols, APs, scan results, findings, risk scores, baselines, snapshots,
+protocols, APs, web observations, scan results, legacy findings/score storage, baselines, snapshots,
 changes, capture metadata, signed update packs, and the audit log. Every dynamic
 value is passed as a query parameter. Foreign keys are enabled per connection.
 
@@ -130,7 +130,7 @@ history.
    Audit, mock LCD, authenticated API skeleton, and tests.
 2. V2 preview in `kali_demo/`: cross-platform interface detection, real bounded
    Nmap host discovery, explicitly confirmed single-host service verification,
-   progress/cancellation, contextual exposure findings, and JSON/CSV reports.
+   progress/cancellation, raw evidence, HTTP/TLS metadata, and JSON/CSV reports.
 3. V3 preview in `kali_demo/`: named baseline snapshots, scan-to-asset evidence,
    automatic change comparison, acknowledgement, historical changes, and safe
    Wi-Fi AP inventory. Raspberry Pi GPIO/LCD drivers remain to be integrated.

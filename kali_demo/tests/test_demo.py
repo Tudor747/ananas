@@ -14,6 +14,7 @@ class DemoAppTests(unittest.TestCase):
             self.assertIn("/api/real/verify", paths)
             self.assertIn("/api/baseline", paths)
             self.assertIn("/api/wifi/refresh", paths)
+            self.assertIn("/api/real/web", paths)
             self.assertIn("/api/reports/site.json", paths)
             self.assertIn("/api/reports/assets.csv", paths)
             self.assertIn("/api/cancel", paths)

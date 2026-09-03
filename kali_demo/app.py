@@ -27,6 +27,7 @@ from kali_demo.real_scanner import (
 from kali_demo.baseline import BaselineManager
 from kali_demo.reports import assets_csv, site_report
 from kali_demo.wifi_inventory import discover_wifi
+from kali_demo.web_inspector import inspect_website
 
 
 DEMO_DIR = Path(__file__).resolve().parent
@@ -49,6 +50,13 @@ class WifiRequest(BaseModel):
 
 class BaselineRequest(BaseModel):
     name: str = "Site baseline"
+
+
+class WebRequest(BaseModel):
+    host: str
+    port: int
+    scheme: str
+    authorized: bool
 
 
 class DemoService:
@@ -102,7 +110,7 @@ class DemoService:
                     completed=update.completed, total=update.total, message=update.message
                 )
             try:
-                outcome = await ScanOrchestrator(self.repository).run(
+                outcome = await ScanOrchestrator(self.repository, analyze_risk=False).run(
                     scan=scan,
                     scanner=scanner,
                     cancellation=token,
@@ -121,7 +129,6 @@ class DemoService:
                 "status": outcome.scan.status.value,
                 "target": str(network),
                 "assets": len(outcome.assets),
-                "findings": len(outcome.findings),
                 "cancelled": outcome.scan.cancelled,
                 "changes": len(changes),
             }
@@ -147,8 +154,12 @@ class DemoService:
             services = [Service(
                 port=int(item["port"]), transport=item["transport"], name=item["name"],
                 product=item["product"], version=item["version"], evidence=item["evidence"],
+                state=item["state"], reason=item["reason"], method=item["method"],
+                confidence=item["confidence"], extra_info=item["extra_info"],
+                tunnel=item["tunnel"], cpes=json.loads(item["cpes_json"] or "[]"),
             ) for item in connection.execute(
-                """SELECT port, transport, name, product, version, evidence
+                """SELECT port, transport, name, product, version, evidence, state,
+                    reason, method, confidence, extra_info, tunnel, cpes_json
                 FROM services WHERE asset_id=? ORDER BY port""", (row["id"],)
             ).fetchall()]
             asset = Asset(
@@ -157,6 +168,8 @@ class DemoService:
                 services=services, first_seen=datetime.fromisoformat(row["first_seen"]),
                 last_seen=datetime.fromisoformat(row["last_seen"]), risk_score=int(row["risk_score"]),
                 criticality=row["criticality"], confidence=float(row["confidence"]), source=row["source"],
+                status=row["status"], discovery_reason=row["discovery_reason"],
+                hostnames=json.loads(row["hostnames_json"] or "[]"),
             )
             return str(current_site["name"]), asset
 
@@ -182,7 +195,7 @@ class DemoService:
                 target=asset.ip, simulation=False, authorized=True,
             )
             try:
-                outcome = await ScanOrchestrator(self.repository).run(
+                outcome = await ScanOrchestrator(self.repository, analyze_risk=False).run(
                     scan=scan, scanner=scanner, cancellation=token,
                     on_progress=lambda update: self._operation.update(
                         completed=update.completed, total=update.total, message=update.message
@@ -234,6 +247,47 @@ class DemoService:
                 raise
         return {"access_points": len(access_points), "changes": len(changes)}
 
+    async def inspect_web(
+        self, host: str, port: int, scheme: str, authorized: bool
+    ) -> dict[str, object]:
+        if not authorized:
+            raise PermissionError("confirm authorization before inspecting a web service")
+        if self._scan_lock.locked():
+            raise RuntimeError("another operation is already running")
+        _, asset = self._load_current_asset(host)
+        if port not in asset.ports:
+            raise ValueError("inspect only a port previously observed as open on this device")
+        local_networks = await discover_local_networks()
+        validate_target(f"{asset.ip}/32", local_networks)
+        normalized_scheme = scheme.lower()
+        if normalized_scheme not in {"http", "https"}:
+            raise ValueError("scheme must be http or https")
+        async with self._scan_lock:
+            self._operation = {
+                "status": "running", "kind": "web_inspection",
+                "target": f"{normalized_scheme}://{asset.ip}:{port}/",
+                "completed": 0, "total": 1,
+            }
+            try:
+                observation = await inspect_website(asset.ip, port, normalized_scheme)
+                observed_at = datetime.now().astimezone().isoformat()
+                with self.repository.connect() as connection:
+                    connection.execute(
+                        """INSERT INTO web_observations(asset_id, scheme, host, port,
+                        requested_path, status_code, status_reason, http_version,
+                        headers_json, tls_json, observed_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (asset.id, observation.scheme, observation.host, observation.port,
+                         observation.path, observation.status_code, observation.status_reason,
+                         observation.http_version, json.dumps(observation.headers),
+                         json.dumps(observation.tls) if observation.tls else None, observed_at),
+                    )
+                self._operation.update(status="completed", completed=1)
+            except Exception:
+                self._operation.update(status="failed")
+                raise
+        return {**observation.to_dict(), "observed_at": observed_at}
+
     def create_baseline(self, name: str) -> dict[str, object]:
         site = self.state().get("current_site")
         if not site:
@@ -260,40 +314,63 @@ class DemoService:
             ).fetchone()
             site_id = int(current_site["id"]) if current_site else -1
             assets = [dict(row) for row in connection.execute(
-                """SELECT a.id, a.ip, a.mac, a.hostname, a.vendor, a.device_type,
-                    a.criticality, a.confidence, a.risk_score, a.source, a.last_seen,
-                    COALESCE((SELECT GROUP_CONCAT(port, ', ') FROM
-                        (SELECT port FROM ports WHERE asset_id=a.id ORDER BY port)), '') AS ports,
-                    COALESCE((SELECT GROUP_CONCAT(label, ', ') FROM
-                        (SELECT name || ' (TCP/' || port || ')' AS label FROM services
-                         WHERE asset_id=a.id ORDER BY port)), '') AS services,
-                    COALESCE((SELECT GROUP_CONCAT(name, ', ') FROM
-                        (SELECT name FROM protocols WHERE asset_id=a.id ORDER BY name)), '') AS protocols
-                FROM assets a WHERE a.site_id=?
-                ORDER BY a.risk_score DESC, a.ip""",
-                (site_id,),
+                """SELECT a.id, a.ip, a.mac, a.hostname, a.vendor, a.source,
+                    a.status, a.discovery_reason, a.hostnames_json,
+                    a.first_seen, a.last_seen
+                FROM assets a WHERE a.site_id=? ORDER BY a.ip""", (site_id,)
             ).fetchall()]
-            findings = [dict(row) for row in connection.execute(
-                """SELECT title, asset, severity, risk_score, confidence,
-                    technical_reason, human_explanation, recommendation, evidence, created_at
-                FROM findings f JOIN scans sc ON sc.id=f.scan_id
-                WHERE sc.site_id=? ORDER BY created_at DESC LIMIT 20""",
-                (site_id,),
-            ).fetchall()]
+            for asset in assets:
+                asset_id = int(asset["id"])
+                try:
+                    asset["hostnames"] = json.loads(asset.pop("hostnames_json") or "[]")
+                except (json.JSONDecodeError, TypeError):
+                    asset["hostnames"] = []
+                asset["ports"] = [dict(row) for row in connection.execute(
+                    """SELECT port, transport, state, observed_at FROM ports
+                    WHERE asset_id=? ORDER BY port, transport""", (asset_id,)
+                ).fetchall()]
+                asset["services"] = [dict(row) for row in connection.execute(
+                    """SELECT port, transport, state, reason, name, product, version,
+                        extra_info, tunnel, method, confidence, cpes_json, evidence, observed_at
+                    FROM services WHERE asset_id=? ORDER BY port, transport""", (asset_id,)
+                ).fetchall()]
+                for service in asset["services"]:
+                    try:
+                        service["cpes"] = json.loads(service.pop("cpes_json") or "[]")
+                    except (json.JSONDecodeError, TypeError):
+                        service["cpes"] = []
+                asset["protocols"] = [dict(row) for row in connection.execute(
+                    """SELECT name, port, evidence, observed_at FROM protocols
+                    WHERE asset_id=? ORDER BY name, port""", (asset_id,)
+                ).fetchall()]
+                asset["web_observations"] = [dict(row) for row in connection.execute(
+                    """SELECT id, scheme, host, port, requested_path AS path, status_code,
+                        status_reason, http_version, headers_json, tls_json, observed_at
+                    FROM web_observations WHERE asset_id=? ORDER BY observed_at DESC LIMIT 10""",
+                    (asset_id,),
+                ).fetchall()]
+                for observation in asset["web_observations"]:
+                    observation["headers"] = json.loads(observation.pop("headers_json") or "[]")
+                    observation["tls"] = (
+                        json.loads(observation.pop("tls_json"))
+                        if observation.get("tls_json") else None
+                    )
             changes = [dict(row) for row in connection.execute(
                 """SELECT id, change_type, asset_identity, details_json, detected_at, acknowledged_at
                 FROM changes WHERE site_id=? ORDER BY detected_at DESC LIMIT 20""",
                 (site_id,),
             ).fetchall()]
             access_points = [dict(row) for row in connection.execute(
-                """SELECT ssid, bssid, signal_dbm, channel, encryption, last_seen
+                """SELECT ssid, bssid, signal_dbm AS signal_dbm_estimated, signal_percent, channel,
+                    frequency_mhz, band, authentication, encryption, cipher, radio_type,
+                    network_type, mode, rate, source, first_seen, last_seen
                 FROM wifi_access_points WHERE site_id=?
                 ORDER BY last_seen DESC, signal_dbm DESC""",
                 (site_id,),
             ).fetchall()]
             scans = [dict(row) for row in connection.execute(
-                """SELECT id, status, profile, level, assets_found, findings_found,
-                    started_at, finished_at FROM scans WHERE site_id=?
+                """SELECT id, status, target, level, assets_found,
+                    started_at, finished_at, cancelled, error FROM scans WHERE site_id=?
                     ORDER BY started_at DESC LIMIT 10""", (site_id,)
             ).fetchall()]
             counts = {
@@ -303,10 +380,6 @@ class DemoService:
                 ).fetchone()[0]),
                 "assets": int(connection.execute(
                     "SELECT COUNT(*) FROM assets WHERE site_id=?", (site_id,)
-                ).fetchone()[0]),
-                "findings": int(connection.execute(
-                    """SELECT COUNT(*) FROM findings f JOIN scans sc ON sc.id=f.scan_id
-                    WHERE sc.site_id=?""", (site_id,)
                 ).fetchone()[0]),
                 "audit_log": int(connection.execute("SELECT COUNT(*) FROM audit_log").fetchone()[0]),
                 "changes": int(connection.execute(
@@ -337,7 +410,6 @@ class DemoService:
             "operation": dict(self._operation),
             "baseline": self.baselines.status(site_name),
             "assets": assets,
-            "findings": findings,
             "changes": changes,
             "access_points": access_points,
             "scans": scans,
@@ -349,7 +421,7 @@ def create_app(database_path: Path | str = DEFAULT_DATABASE) -> FastAPI:
     application = FastAPI(
         title="Pi-OT Probe Engineering Console",
         description="Local V2/V3 discovery, service verification, baseline, and reporting dashboard.",
-        version="0.3.0",
+        version="0.4.0",
     )
     application.state.demo_service = service
     application.mount("/static", StaticFiles(directory=DEMO_DIR / "static"), name="static")
@@ -410,6 +482,20 @@ def create_app(database_path: Path | str = DEFAULT_DATABASE) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except RuntimeError as exc:
+            status_code = 409 if "already running" in str(exc) else 503
+            raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
+    @application.post("/api/real/web")
+    async def inspect_web(request: WebRequest) -> dict[str, object]:
+        try:
+            return await service.inspect_web(
+                request.host, request.port, request.scheme, request.authorized
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except (RuntimeError, OSError, TimeoutError) as exc:
             status_code = 409 if "already running" in str(exc) else 503
             raise HTTPException(status_code=status_code, detail=str(exc)) from exc
 

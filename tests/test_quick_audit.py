@@ -11,7 +11,7 @@ from pi_ot_probe.simulation.scanner import SimulationScanner
 
 
 class QuickAuditTests(unittest.IsolatedAsyncioTestCase):
-    async def test_quick_audit_persists_assets_findings_artifacts_and_audit(self) -> None:
+    async def test_quick_audit_persists_raw_assets_artifacts_and_audit(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repository = Repository(Path(directory) / "probe.db")
             scan = Scan(
@@ -28,9 +28,9 @@ class QuickAuditTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(outcome.scan.status, ScanStatus.COMPLETED)
             self.assertEqual(len(outcome.assets), 5)
-            self.assertEqual(len(outcome.findings), 2)
+            self.assertEqual(len(outcome.findings), 0)
             self.assertEqual(repository.counts(), {
-                "sites": 1, "scans": 1, "assets": 5, "findings": 2, "audit_log": 1,
+                "sites": 1, "scans": 1, "assets": 5, "audit_log": 1,
             })
             with repository.connect() as connection:
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM changes").fetchone()[0], 4)

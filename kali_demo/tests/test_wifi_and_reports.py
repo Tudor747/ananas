@@ -10,13 +10,16 @@ class WifiParserTests(unittest.TestCase):
         access_points = parse_nmcli(document)
         self.assertEqual(access_points[0].bssid, "AA:BB:CC:DD:EE:FF")
         self.assertEqual(access_points[0].signal_dbm, -60)
+        self.assertEqual(access_points[0].signal_percent, 80)
         self.assertTrue(access_points[1].suspicious)
 
     def test_windows_netsh_parser_reads_multiple_bssids(self) -> None:
         document = """SSID 1 : Factory
     Authentication : WPA2-Personal
+    Encryption : CCMP
     BSSID 1 : aa:bb:cc:dd:ee:01
          Signal : 90%
+         Radio type : 802.11ax
          Channel : 6
     BSSID 2 : aa:bb:cc:dd:ee:02
          Signal : 70%
@@ -25,6 +28,9 @@ class WifiParserTests(unittest.TestCase):
         access_points = parse_windows_netsh(document)
         self.assertEqual(len(access_points), 2)
         self.assertEqual(access_points[1].channel, 11)
+        self.assertEqual(access_points[0].authentication, "WPA2-Personal")
+        self.assertEqual(access_points[0].cipher, "CCMP")
+        self.assertEqual(access_points[0].signal_percent, 90)
 
 
 class ReportTests(unittest.TestCase):
@@ -33,10 +39,11 @@ class ReportTests(unittest.TestCase):
             "current_site": "SITE", "mode": "real_discovery",
             "counts": {"assets": 1}, "baseline": {"name": "Approved"},
             "assets": [{"ip": "192.168.1.10", "mac": "AA", "hostname": "host",
-                        "vendor": "Vendor", "device_type": "server", "criticality": "normal",
-                        "ports": "22", "services": "ssh", "protocols": "", "risk_score": 20,
-                        "confidence": .8, "source": "test", "last_seen": "now"}],
-            "findings": [], "changes": [], "access_points": [], "scans": [],
+                        "vendor": "Vendor", "status": "up", "discovery_reason": "syn-ack",
+                        "hostnames": [], "ports": [{"port": 22}],
+                        "services": [{"name": "ssh"}], "protocols": [],
+                        "source": "test", "first_seen": "then", "last_seen": "now"}],
+            "changes": [], "access_points": [], "scans": [],
         }
         report = site_report(state)
         self.assertEqual(report["site"], "SITE")

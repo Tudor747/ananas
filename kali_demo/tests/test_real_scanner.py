@@ -14,6 +14,7 @@ from kali_demo.real_scanner import (
 )
 from pi_ot_probe.core.models import Asset, ScanLevel, ScanProgress, Service, WifiAccessPoint
 from pi_ot_probe.scanners.base import CancellationToken, ScanContext, Scanner
+from kali_demo.web_inspector import WebObservation
 
 
 NMAP_XML = """<?xml version="1.0"?>
@@ -66,7 +67,9 @@ class NmapXmlTests(unittest.TestCase):
         self.assertEqual([asset.ip for asset in assets], ["192.168.50.1", "192.168.50.20"])
         self.assertEqual(assets[0].mac, "AA:BB:CC:DD:EE:01")
         self.assertEqual(assets[0].vendor, "Router Labs")
-        self.assertEqual(assets[0].device_type, "router")
+        self.assertEqual(assets[0].hostname, "gateway.local")
+        self.assertEqual(assets[0].hostnames, [{"name": "gateway.local", "type": "PTR"}])
+        self.assertEqual(assets[0].discovery_reason, "arp-response")
         self.assertEqual(assets[0].source, "nmap-host-discovery")
 
     def test_parser_rejects_malformed_xml(self) -> None:
@@ -169,7 +172,7 @@ class RealDiscoveryServiceTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(state["assets"][0]["source"], "nmap-host-discovery")
             self.assertEqual(state["counts"]["audit_log"], 1)
 
-    async def test_service_verification_is_single_host_and_creates_exposure_finding(self) -> None:
+    async def test_service_verification_is_single_host_and_keeps_raw_observation(self) -> None:
         local = [LocalNetwork("eth0", "192.168.50.10", "192.168.50.0/24", "192.168.50.0/24")]
         with tempfile.TemporaryDirectory() as directory:
             service = DemoService(Path(directory) / "demo.db")
@@ -186,9 +189,9 @@ class RealDiscoveryServiceTests(unittest.IsolatedAsyncioTestCase):
             state = service.state()
 
             self.assertEqual(result["open_ports"], [23])
-            self.assertEqual(state["assets"][0]["ports"], "23")
-            self.assertEqual(state["counts"]["findings"], 1)
-            self.assertIn("not proof of a vulnerability", state["findings"][0]["human_explanation"])
+            self.assertEqual(state["assets"][0]["ports"][0]["port"], 23)
+            self.assertEqual(state["assets"][0]["services"][0]["name"], "telnet")
+            self.assertNotIn("findings", state)
 
     async def test_wifi_refresh_persists_aps_and_compares_with_baseline(self) -> None:
         local = [LocalNetwork("eth0", "192.168.50.10", "192.168.50.0/24", "192.168.50.0/24")]
@@ -208,6 +211,38 @@ class RealDiscoveryServiceTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result, {"access_points": 1, "changes": 1})
             self.assertEqual(len(state["access_points"]), 1)
             self.assertEqual(state["changes"][0]["change_type"], "new_wifi_ap")
+
+    async def test_web_inspection_requires_an_observed_port_and_stores_raw_headers(self) -> None:
+        local = [LocalNetwork("eth0", "192.168.50.10", "192.168.50.0/24", "192.168.50.0/24")]
+        with tempfile.TemporaryDirectory() as directory:
+            service = DemoService(Path(directory) / "demo.db")
+            with (
+                patch("kali_demo.app.discover_local_networks", new=AsyncMock(return_value=local)),
+                patch("kali_demo.app.NmapDiscoveryScanner", FakeNmapScanner),
+            ):
+                await service.run_real("192.168.50.0/24", True)
+            with (
+                patch("kali_demo.app.discover_local_networks", new=AsyncMock(return_value=local)),
+                patch("kali_demo.app.NmapServiceScanner", FakeServiceScanner),
+            ):
+                await service.verify_services("192.168.50.1", True)
+            observation = WebObservation(
+                "http", "192.168.50.1", 23, "/", 200, "OK", "HTTP/1.1",
+                [{"name": "Server", "value": "test"}],
+            )
+            with (
+                patch("kali_demo.app.discover_local_networks", new=AsyncMock(return_value=local)),
+                patch("kali_demo.app.inspect_website", new=AsyncMock(return_value=observation)),
+            ):
+                result = await service.inspect_web("192.168.50.1", 23, "http", True)
+            state = service.state()
+
+            self.assertEqual(result["status_code"], 200)
+            self.assertEqual(
+                state["assets"][0]["web_observations"][0]["headers"][0]["name"], "Server"
+            )
+            with self.assertRaises(ValueError):
+                await service.inspect_web("192.168.50.1", 80, "http", True)
 
 
 if __name__ == "__main__":

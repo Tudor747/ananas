@@ -3,92 +3,72 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Pi-OT Probe // Engineering Console</title>
+  <title>Pi-OT Probe // Raw Network Inventory</title>
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
   <header class="topbar">
-    <div>
-      <p class="eyebrow">PI-OT SECURITY PROBE</p>
-      <h1>Discovery and baseline console</h1>
-    </div>
-    <div class="safe-badge"><span></span> SAFE DEFAULTS / EXPLICIT AUTHORIZATION</div>
+    <div><p class="eyebrow">PI-OT SECURITY PROBE</p><h1>Raw network inventory</h1></div>
+    <div class="safe-badge"><span></span> LOCAL / OBSERVATIONS ONLY</div>
   </header>
-
   <main>
     <section class="hero panel">
       <div>
-        <p class="eyebrow">V2 REAL DISCOVERY</p>
-        <h2>Inventory a private network you are authorized to assess.</h2>
-        <p class="muted">Host discovery is limited to 10 probes/second. Service verification is optional, targets one selected device, checks only 20 common TCP ports at 5 connections/second, and runs no scripts or version probes.</p>
+        <p class="eyebrow">AUTHORIZED LOCAL DISCOVERY</p>
+        <h2>See what your computer can directly observe on your network.</h2>
+        <p class="muted">No risk scores and no vulnerability claims. Host discovery records responding devices, addresses, hostnames and discovery evidence. Optional service checks inspect 20 common TCP ports on one device; observed web ports can then return raw HTTP/TLS metadata. Missing values are shown as not observed.</p>
       </div>
       <div class="controls">
         <label for="network">Local private network</label>
         <select id="network" disabled><option>Detecting interfaces...</option></select>
-        <label class="authorization"><input id="authorized" type="checkbox"> I am authorized to assess this network</label>
+        <label class="authorization"><input id="authorized" type="checkbox"> I own this network or have permission to inspect it</label>
         <button id="run-button" type="button" disabled>Discover devices</button>
         <button id="cancel-button" class="secondary" type="button" disabled>Cancel operation</button>
       </div>
     </section>
-
     <div id="status" class="status" role="status">Detecting safe local network targets...</div>
-
-    <section class="metrics" aria-label="Audit metrics">
-      <article><span id="metric-assets">0</span><small>Assets</small></article>
-      <article><span id="metric-ot">0</span><small>OT devices</small></article>
-      <article><span id="metric-findings">0</span><small>Findings</small></article>
-      <article><span id="metric-changes">0</span><small>Changes</small></article>
+    <section class="metrics" aria-label="Inventory totals">
+      <article><span id="metric-assets">0</span><small>Devices observed</small></article>
+      <article><span id="metric-services">0</span><small>Open ports observed</small></article>
+      <article><span id="metric-wifi">0</span><small>Wi-Fi radios</small></article>
+      <article><span id="metric-changes">0</span><small>Baseline changes</small></article>
     </section>
-
     <section class="panel action-panel">
-      <div>
-        <p class="eyebrow">V3 MONITORING</p>
-        <h2>Baseline and reporting</h2>
-        <p id="baseline-status" class="muted">No active baseline.</p>
-      </div>
+      <div><p class="eyebrow">HISTORY</p><h2>Baseline and raw exports</h2><p id="baseline-status" class="muted">No active baseline.</p></div>
       <div class="action-controls">
         <input id="baseline-name" maxlength="100" value="Site baseline" aria-label="Baseline name">
         <button id="baseline-button" type="button">Create baseline</button>
         <button id="wifi-button" class="secondary-safe" type="button">Refresh Wi-Fi inventory</button>
-        <a class="button-link" href="/api/reports/site.json">Download JSON</a>
-        <a class="button-link" href="/api/reports/assets.csv">Download CSV</a>
+        <a class="button-link" href="/api/reports/site.json">Download all data (JSON)</a>
+        <a class="button-link" href="/api/reports/assets.csv">Devices (CSV)</a>
       </div>
     </section>
-
+    <section class="panel wide-block">
+      <div class="section-heading"><div><p class="eyebrow">WIRED / IP INVENTORY</p><h2>Observed devices</h2></div><span id="asset-count" class="counter">0</span></div>
+      <p class="section-help">Hostname, MAC and vendor are shown only when the network or Nmap supplied them. Open “Raw details” for timestamps, sources, service evidence and every retained field.</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>IP address</th><th>Hostname</th><th>MAC / vendor</th><th>Observed services</th><th>Evidence</th><th>Action</th></tr></thead>
+        <tbody id="assets-body"></tbody>
+      </table></div>
+    </section>
+    <section class="panel wide-block">
+      <div class="section-heading"><div><p class="eyebrow">RADIO INVENTORY</p><h2>Wi-Fi access points</h2></div></div>
+      <p class="section-help">An SSID is the network name; a BSSID identifies one access-point radio. Signal in dBm is estimated when the operating system supplies only a percentage.</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>SSID</th><th>BSSID</th><th>Signal</th><th>Channel / band</th><th>Authentication / cipher</th><th>Radio details</th></tr></thead>
+        <tbody id="wifi-body"></tbody>
+      </table></div>
+    </section>
     <section class="grid">
-      <article class="panel wide">
-        <div class="section-heading"><div><p class="eyebrow">INVENTORY</p><h2>Assets</h2></div><span id="asset-count" class="counter">0</span></div>
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>Address</th><th>Identity</th><th>Type</th><th>Ports / services</th><th>Risk</th><th>Action</th></tr></thead>
-            <tbody id="assets-body"></tbody>
-          </table>
-        </div>
-      </article>
-
-      <article class="panel">
-        <div class="section-heading"><div><p class="eyebrow">PRIORITY</p><h2>Findings</h2></div></div>
-        <div id="findings" class="stack"></div>
-      </article>
-
-      <article class="panel">
-        <div class="section-heading"><div><p class="eyebrow">BASELINE</p><h2>Observed changes</h2></div></div>
-        <div id="changes" class="stack"></div>
-      </article>
-
-      <article class="panel">
-        <div class="section-heading"><div><p class="eyebrow">RADIO</p><h2>Wi-Fi access points</h2></div></div>
-        <div id="wifi" class="stack"></div>
-      </article>
-
-      <article class="panel">
-        <div class="section-heading"><div><p class="eyebrow">HISTORY</p><h2>Recent scans</h2></div></div>
-        <div id="scans" class="stack"></div>
-      </article>
+      <article class="panel"><div class="section-heading"><div><p class="eyebrow">BASELINE</p><h2>Observed changes</h2></div></div><div id="changes" class="stack"></div></article>
+      <article class="panel"><div class="section-heading"><div><p class="eyebrow">AUDIT TRAIL</p><h2>Recent scans</h2></div></div><div id="scans" class="stack"></div></article>
+    </section>
+    <section class="panel limits">
+      <p class="eyebrow">HOW TO READ MISSING DATA</p><h2>“Not observed” does not mean “does not exist.”</h2>
+      <p class="muted">A device can block discovery, DNS may have no hostname, MAC addresses normally stay inside the local segment, and operating systems expose different Wi-Fi fields. Service verification checks only the selected device and 20 common TCP ports; it is not a complete 65,535-port scan.</p>
     </section>
   </main>
-
-  <footer>LOCALHOST APP / V2 DISCOVERY / V3 BASELINES / INDUSTRIAL-SAFE LIMITS</footer>
+  <footer>LOCALHOST APP / RAW EVIDENCE / SAFE BOUNDED CHECKS / NO RISK SCORING</footer>
   <script src="/static/app.js" defer></script>
 </body>
 </html>

@@ -25,9 +25,13 @@ class ScanOutcome:
 
 
 class ScanOrchestrator:
-    def __init__(self, repository: Repository, risk_engine: RiskEngine | None = None) -> None:
+    def __init__(
+        self, repository: Repository, risk_engine: RiskEngine | None = None,
+        *, analyze_risk: bool = False,
+    ) -> None:
         self.repository = repository
-        self.risk_engine = risk_engine or RiskEngine()
+        self.risk_engine = risk_engine or (RiskEngine() if analyze_risk else None)
+        self.analyze_risk = analyze_risk
 
     @staticmethod
     def _enforce_safety(context: ScanContext, scanner: Scanner) -> None:
@@ -67,7 +71,10 @@ class ScanOrchestrator:
         try:
             async for progress in scanner.scan(context, cancellation):
                 if progress.asset is not None:
-                    asset_findings = self.risk_engine.evaluate(progress.asset)
+                    asset_findings = (
+                        self.risk_engine.evaluate(progress.asset)
+                        if self.analyze_risk and self.risk_engine is not None else []
+                    )
                     asset_id = self.repository.upsert_asset(site_id, progress.asset)
                     self.repository.link_scan_asset(scan.id, asset_id, progress.asset.last_seen)
                     for finding in asset_findings:

@@ -35,9 +35,9 @@ python -m pi_ot_probe quick-audit
 ```
 
 The changed scenario contains five devices and synthetic examples of a new HMI,
-a removed historian, a new PLC web port, an open duplicate SSID, S7/Modbus
-detection, and high contextual risk. Findings explicitly describe service
-exposure rather than claiming a vulnerability.
+a removed historian, a new PLC web port, a duplicate SSID, and S7/Modbus
+observations. The active product path records raw evidence and does not calculate
+or display risk scores.
 
 Press `Ctrl+C` to abort the CLI. Scanner implementations also receive a shared
 cancellation token and must check it between operations.
@@ -81,6 +81,7 @@ It binds to `127.0.0.1:8080` by default. Send the token as
 See [ARCHITECTURE.md](ARCHITECTURE.md) for components, data flow, scan levels,
 hardware abstraction, persistence, security controls, and phased boundaries.
 The separate `kali_demo/` engineering console now contains the V2/V3 preview:
-cross-platform real host discovery, confirmed single-host service verification,
-site baselines, change history, Wi-Fi AP inventory, and JSON/CSV reports. GPIO,
-packet capture, and active OT protocol handshakes remain deferred.
+cross-platform real host discovery, confirmed single-host service checks, raw
+HTTP/TLS metadata, site baselines, change history, detailed Wi-Fi AP inventory,
+and JSON/CSV reports. GPIO, packet capture, and active OT protocol handshakes
+remain deferred.

@@ -8,7 +8,6 @@ from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from pi_ot_probe.api.routes.assets import build_router as assets_router
-from pi_ot_probe.api.routes.findings import build_router as findings_router
 from pi_ot_probe.api.routes.scans import build_router as scans_router
 from pi_ot_probe.api.routes.system import build_router as system_router
 from pi_ot_probe.database.repository import Repository
@@ -25,10 +24,8 @@ def create_app(repository: Repository, api_token: str) -> FastAPI:
         if credentials is None or not compare_digest(credentials.credentials, api_token):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid API token")
 
-    app = FastAPI(title="Pi-OT Security Probe", version="0.1.0", dependencies=[Depends(authenticate)])
+    app = FastAPI(title="Pi-OT Security Probe", version="0.4.0", dependencies=[Depends(authenticate)])
     app.include_router(system_router(repository))
     app.include_router(assets_router(repository))
     app.include_router(scans_router(repository))
-    app.include_router(findings_router(repository))
     return app
-

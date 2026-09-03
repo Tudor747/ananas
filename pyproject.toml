@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pi-ot-security-probe"
-version = "0.3.0"
+version = "0.4.0"
 description = "Offline-first, safety-oriented IoT/OT assessment appliance foundation"
 requires-python = ">=3.11"
 dependencies = [

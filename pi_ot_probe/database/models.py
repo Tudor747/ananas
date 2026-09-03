@@ -61,6 +61,9 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         confidence REAL NOT NULL,
         risk_score INTEGER NOT NULL CHECK(risk_score BETWEEN 0 AND 100),
         source TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'up',
+        discovery_reason TEXT,
+        hostnames_json TEXT NOT NULL DEFAULT '[]',
         first_seen TEXT NOT NULL,
         last_seen TEXT NOT NULL,
         UNIQUE(site_id, ip)
@@ -82,7 +85,9 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         asset_id INTEGER NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
         port INTEGER NOT NULL, transport TEXT NOT NULL, name TEXT NOT NULL,
-        product TEXT, version TEXT, evidence TEXT, observed_at TEXT NOT NULL,
+        product TEXT, version TEXT, evidence TEXT, state TEXT NOT NULL DEFAULT 'open',
+        reason TEXT, method TEXT, confidence INTEGER, extra_info TEXT, tunnel TEXT,
+        cpes_json TEXT NOT NULL DEFAULT '[]', observed_at TEXT NOT NULL,
         UNIQUE(asset_id, port, transport)
     )""",
     """CREATE TABLE IF NOT EXISTS protocols (
@@ -97,13 +102,24 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         site_id INTEGER NOT NULL REFERENCES sites(id),
         ssid TEXT NOT NULL, bssid TEXT NOT NULL, signal_dbm INTEGER,
         channel INTEGER, encryption TEXT, first_seen TEXT NOT NULL,
-        last_seen TEXT NOT NULL, UNIQUE(site_id, bssid)
+        last_seen TEXT NOT NULL, signal_percent INTEGER, frequency_mhz INTEGER,
+        band TEXT, authentication TEXT, cipher TEXT, radio_type TEXT,
+        network_type TEXT, mode TEXT, rate TEXT, source TEXT NOT NULL DEFAULT 'unknown',
+        UNIQUE(site_id, bssid)
     )""",
     """CREATE TABLE IF NOT EXISTS scan_results (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         scan_id TEXT NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
         plugin TEXT NOT NULL, asset_id INTEGER REFERENCES assets(id),
         result_json TEXT NOT NULL, created_at TEXT NOT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS web_observations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        asset_id INTEGER NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+        scheme TEXT NOT NULL, host TEXT NOT NULL, port INTEGER NOT NULL,
+        requested_path TEXT NOT NULL, status_code INTEGER NOT NULL,
+        status_reason TEXT, http_version TEXT, headers_json TEXT NOT NULL,
+        tls_json TEXT, observed_at TEXT NOT NULL
     )""",
     """CREATE TABLE IF NOT EXISTS scan_assets (
         scan_id TEXT NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
@@ -165,5 +181,6 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS idx_assets_site ON assets(site_id)",
     "CREATE INDEX IF NOT EXISTS idx_findings_scan ON findings(scan_id)",
     "CREATE INDEX IF NOT EXISTS idx_scan_assets_asset ON scan_assets(asset_id)",
+    "CREATE INDEX IF NOT EXISTS idx_web_observations_asset ON web_observations(asset_id)",
     "CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON audit_log(timestamp)",
 )

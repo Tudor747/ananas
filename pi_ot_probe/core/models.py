@@ -51,6 +51,13 @@ class Service:
     product: str | None = None
     version: str | None = None
     evidence: str | None = None
+    state: str = "open"
+    reason: str | None = None
+    method: str | None = None
+    confidence: int | None = None
+    extra_info: str | None = None
+    tunnel: str | None = None
+    cpes: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -86,6 +93,9 @@ class Asset:
     confidence: float = 0.0
     id: int | None = None
     source: str = "unknown"
+    status: str = "up"
+    discovery_reason: str | None = None
+    hostnames: list[dict[str, str]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -154,6 +164,16 @@ class WifiAccessPoint:
     channel: int
     encryption: str
     suspicious: bool = False
+    signal_percent: int | None = None
+    frequency_mhz: int | None = None
+    band: str | None = None
+    authentication: str | None = None
+    cipher: str | None = None
+    radio_type: str | None = None
+    network_type: str | None = None
+    mode: str | None = None
+    rate: str | None = None
+    source: str = "unknown"
 
 
 @dataclass(slots=True)

@@ -1,11 +1,11 @@
-# V2/V3 discovery and baseline app
+# Raw network inventory and website inspector
 
 This is a separate, local browser application for safe Pi-OT Security Probe
 host discovery. It detects active private IPv4 interfaces, lets the operator
 select one local subnet, and stores real responding devices in SQLite.
 
-The default scan is deliberately limited to Nmap host discovery (`-sn`). V2
-also provides an optional **Verify services** action for one selected asset. It
+The default scan is deliberately limited to Nmap host discovery (`-sn`). It
+also provides an optional **Check 20 TCP ports** action for one selected asset. It
 uses a TCP connect scan of only 20 common ports, capped at five connections per
 second. It does not detect versions or operating systems, run NSE scripts, test
 credentials, exploit devices, or perform denial-of-service actions.
@@ -14,7 +14,14 @@ Targets are restricted to directly connected RFC1918 networks of 256 addresses
 or fewer. The operator must explicitly confirm authorization, all scans have
 timeouts, and every operation can be cancelled and is audit logged.
 
-V3 adds named site baselines, automatic comparison after discovery, new and
+The application presents observations rather than risk scores. It does not
+infer a device type from a hostname or vendor, and it displays missing values as
+**Not observed**. It retains the raw fields supplied by its bounded collectors:
+IP/MAC/vendor/hostnames, host status and reason, structured service details,
+SSID/BSSID and radio details, timestamps, sources, scan history, and HTTP/TLS
+metadata when a discovered website is explicitly inspected.
+
+Named site baselines provide automatic comparison after discovery, new and
 removed device detection, MAC/IP and new-port changes, Wi-Fi AP inventory,
 change acknowledgement, and downloadable JSON/CSV reports.
 
@@ -38,9 +45,16 @@ Open <http://127.0.0.1:8088> in the Kali browser. Select a detected local
 private network, confirm that you are authorized to assess it, and click
 **Discover devices**. The inventory records IP, MAC/vendor data when Nmap can
 observe it, hostname when available, source, timestamps, and audit history.
-Use **Verify services** on an individual asset only when the additional TCP
+Use **Check 20 TCP ports** on an individual asset only when the additional TCP
 connections are acceptable. Create a baseline after reviewing the inventory;
 later discovery runs are compared automatically.
+
+After a web port is observed, **Inspect HTTP/HTTPS** sends one `HEAD /` request,
+does not follow redirects, and records the response status, headers, TLS
+protocol/cipher and certificate fingerprint. It reports facts without grading
+them. Certificate validation is not performed for this local-IP observation and
+that limitation is shown in the raw details. `Set-Cookie` values are redacted so
+the inventory does not become a store of session credentials.
 
 Only assess networks you own or have explicit permission to test. Host
 discovery transmits ICMP/TCP discovery probes, or ARP on a directly connected
@@ -78,6 +92,9 @@ curl -X POST http://127.0.0.1:8088/api/real/run \
 curl -X POST http://127.0.0.1:8088/api/real/verify \
   -H 'Content-Type: application/json' \
   -d '{"host":"192.168.1.10","authorized":true}'
+curl -X POST http://127.0.0.1:8088/api/real/web \
+  -H 'Content-Type: application/json' \
+  -d '{"host":"192.168.1.10","port":80,"scheme":"http","authorized":true}'
 curl -X POST http://127.0.0.1:8088/api/baseline \
   -H 'Content-Type: application/json' \
   -d '{"name":"Approved site"}'
@@ -88,7 +105,7 @@ curl -OJ http://127.0.0.1:8088/api/reports/assets.csv
 
 The API rejects public networks, networks not attached to the machine, targets
 larger than `/24`, and requests without authorization confirmation. Use
-`POST /api/cancel` to stop an in-progress discovery or service-verification scan.
+`POST /api/cancel` to stop an in-progress discovery or service-check scan.
 
 Wi-Fi inventory requires NetworkManager/nmcli on Linux or WLAN AutoConfig/netsh
 on Windows. Refreshing Wi-Fi requires the authorization checkbox. Linux uses a
@@ -114,6 +131,8 @@ configuration through `psutil` without administrator rights; PowerShell and
 iproute2 remain fallback adapters. It does not require WSL, Kali, Bash, or
 Docker. If Nmap was installed while PowerShell was already open, start a new
 PowerShell window so its command path refreshes.
+If Nmap is installed on another drive, add the directory containing `nmap.exe`
+to `PATH` before running the launcher.
 
 If port 8088 is already occupied, stop the old server with `Ctrl+C` or use:
 
@@ -121,3 +140,16 @@ If port 8088 is already occupied, stop the old server with `Ctrl+C` or use:
 $env:PI_OT_DEMO_PORT = "8090"
 .\run.ps1
 ```
+
+## Known limits and remaining appliance work
+
+- Hostnames depend on DNS/Nmap; MAC/vendor normally appear only on the local
+  layer-2 segment, and hidden SSIDs can remain unnamed.
+- Windows and NetworkManager expose different Wi-Fi fields. Monitor-mode/Kismet
+  integration would be needed for richer passive radio metadata.
+- The service check covers 20 common TCP ports. A wider scan should be a
+  separately confirmed profile with clear traffic and time limits.
+- Real Raspberry Pi LCD/GPIO, restricted system-service permissions,
+  authenticated remote management, bounded packet metadata capture, and safe OT
+  protocol identification still need hardware integration testing.
+- PDF reports and signed offline intelligence updates remain later deliverables.

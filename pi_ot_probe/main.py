@@ -16,7 +16,6 @@ from pi_ot_probe.scanners.base import CancellationToken
 from pi_ot_probe.scanners.orchestrator import ScanOrchestrator
 from pi_ot_probe.simulation.scanner import SimulationScanner
 from pi_ot_probe.ui.lcd import MockLCD
-from pi_ot_probe.ui.screens import finding as finding_screen
 from pi_ot_probe.ui.screens import scan_progress
 
 
@@ -77,11 +76,7 @@ async def run_quick_audit(args: argparse.Namespace, settings: Settings) -> int:
         cancellation.cancel()
         raise
     if lcd:
-        if outcome.findings:
-            highest = max(outcome.findings, key=lambda item: item.risk_score)
-            lcd.display(*finding_screen(highest.title, highest.severity.value))
-        else:
-            lcd.display("AUDIT COMPLETE", f"{len(outcome.assets)} DEVICES")
+        lcd.display("AUDIT COMPLETE", f"{len(outcome.assets)} DEVICES")
     summary = {
         "scan_id": outcome.scan.id,
         "status": outcome.scan.status.value,
@@ -89,15 +84,14 @@ async def run_quick_audit(args: argparse.Namespace, settings: Settings) -> int:
         "simulation": True,
         "scenario": args.scenario,
         "assets": len(outcome.assets),
-        "findings": len(outcome.findings),
         "database": str(database_path),
     }
     if args.json:
         print(json.dumps(summary, indent=2))
     else:
         print(
-            f"Quick Audit {summary['status']}: {summary['assets']} assets, "
-            f"{summary['findings']} findings. Database: {database_path}"
+            f"Quick Audit {summary['status']}: {summary['assets']} raw asset records. "
+            f"Database: {database_path}"
         )
     return 0 if outcome.scan.status.value == "completed" else 1
 

@@ -42,6 +42,29 @@ class Repository:
         with self.connect() as connection:
             for statement in SCHEMA_STATEMENTS:
                 connection.execute(statement)
+            migrations = {
+                "assets": {
+                    "status": "TEXT NOT NULL DEFAULT 'up'",
+                    "discovery_reason": "TEXT",
+                    "hostnames_json": "TEXT NOT NULL DEFAULT '[]'",
+                },
+                "services": {
+                    "state": "TEXT NOT NULL DEFAULT 'open'", "reason": "TEXT",
+                    "method": "TEXT", "confidence": "INTEGER", "extra_info": "TEXT",
+                    "tunnel": "TEXT", "cpes_json": "TEXT NOT NULL DEFAULT '[]'",
+                },
+                "wifi_access_points": {
+                    "signal_percent": "INTEGER", "frequency_mhz": "INTEGER",
+                    "band": "TEXT", "authentication": "TEXT", "cipher": "TEXT",
+                    "radio_type": "TEXT", "network_type": "TEXT", "mode": "TEXT",
+                    "rate": "TEXT", "source": "TEXT NOT NULL DEFAULT 'unknown'",
+                },
+            }
+            for table, columns in migrations.items():
+                existing = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+                for column, declaration in columns.items():
+                    if column not in existing:
+                        connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {declaration}")
 
     def ensure_site(self, name: str, now: datetime) -> int:
         normalized = name.strip()
@@ -90,8 +113,9 @@ class Repository:
             connection.execute(
                 """INSERT INTO assets(
                     site_id, ip, mac, hostname, vendor, device_type, criticality,
-                    confidence, risk_score, source, first_seen, last_seen
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    confidence, risk_score, source, status, discovery_reason, hostnames_json,
+                    first_seen, last_seen
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(site_id, ip) DO UPDATE SET
                     mac=COALESCE(excluded.mac, assets.mac),
                     hostname=COALESCE(excluded.hostname, assets.hostname),
@@ -101,11 +125,16 @@ class Repository:
                     criticality=excluded.criticality,
                     confidence=MAX(excluded.confidence, assets.confidence),
                     risk_score=MAX(excluded.risk_score, assets.risk_score),
-                    source=excluded.source, last_seen=excluded.last_seen""",
+                    source=excluded.source, status=excluded.status,
+                    discovery_reason=COALESCE(excluded.discovery_reason, assets.discovery_reason),
+                    hostnames_json=CASE WHEN excluded.hostnames_json='[]'
+                        THEN assets.hostnames_json ELSE excluded.hostnames_json END,
+                    last_seen=excluded.last_seen""",
                 (
                     site_id, asset.ip, asset.mac, asset.hostname, asset.vendor,
                     asset.device_type, asset.criticality, asset.confidence,
-                    asset.risk_score, asset.source, _iso(asset.first_seen), _iso(asset.last_seen),
+                    asset.risk_score, asset.source, asset.status, asset.discovery_reason,
+                    json.dumps(asset.hostnames), _iso(asset.first_seen), _iso(asset.last_seen),
                 ),
             )
             row = connection.execute(
@@ -124,12 +153,19 @@ class Repository:
                 )
             for service in asset.services:
                 connection.execute(
-                    """INSERT INTO services(asset_id, port, transport, name, product, version, evidence, observed_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(asset_id, port, transport)
+                    """INSERT INTO services(asset_id, port, transport, name, product, version,
+                    evidence, state, reason, method, confidence, extra_info, tunnel, cpes_json, observed_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(asset_id, port, transport)
                     DO UPDATE SET name=excluded.name, product=excluded.product,
-                    version=excluded.version, evidence=excluded.evidence, observed_at=excluded.observed_at""",
+                    version=excluded.version, evidence=excluded.evidence, state=excluded.state,
+                    reason=excluded.reason, method=excluded.method, confidence=excluded.confidence,
+                    extra_info=excluded.extra_info, tunnel=excluded.tunnel,
+                    cpes_json=excluded.cpes_json, observed_at=excluded.observed_at""",
                     (asset_id, service.port, service.transport, service.name, service.product,
-                     service.version, service.evidence, observed_at),
+                     service.version, service.evidence, service.state, service.reason,
+                     service.method, service.confidence, service.extra_info, service.tunnel,
+                     json.dumps(service.cpes), observed_at),
                 )
             for protocol in asset.protocols:
                 connection.execute(
@@ -172,13 +208,24 @@ class Repository:
         with self.connect() as connection:
             connection.execute(
                 """INSERT INTO wifi_access_points(
-                    site_id, ssid, bssid, signal_dbm, channel, encryption, first_seen, last_seen
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    site_id, ssid, bssid, signal_dbm, channel, encryption, first_seen, last_seen,
+                    signal_percent, frequency_mhz, band, authentication, cipher, radio_type,
+                    network_type, mode, rate, source
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(site_id, bssid) DO UPDATE SET ssid=excluded.ssid,
                     signal_dbm=excluded.signal_dbm, channel=excluded.channel,
-                    encryption=excluded.encryption, last_seen=excluded.last_seen""",
+                    encryption=excluded.encryption, signal_percent=excluded.signal_percent,
+                    frequency_mhz=excluded.frequency_mhz, band=excluded.band,
+                    authentication=excluded.authentication, cipher=excluded.cipher,
+                    radio_type=excluded.radio_type, network_type=excluded.network_type,
+                    mode=excluded.mode, rate=excluded.rate, source=excluded.source,
+                    last_seen=excluded.last_seen""",
                 (site_id, access_point.ssid, access_point.bssid, access_point.signal_dbm,
-                 access_point.channel, access_point.encryption, timestamp, timestamp),
+                 access_point.channel, access_point.encryption, timestamp, timestamp,
+                 access_point.signal_percent, access_point.frequency_mhz, access_point.band,
+                 access_point.authentication, access_point.cipher, access_point.radio_type,
+                 access_point.network_type, access_point.mode, access_point.rate,
+                 access_point.source),
             )
 
     def add_change(self, site_id: int, scan_id: str, change: ChangeEvent, detected_at: datetime) -> None:
@@ -207,7 +254,10 @@ class Repository:
     def list_assets(self, site: str) -> list[dict[str, object]]:
         with self.connect() as connection:
             rows = connection.execute(
-                """SELECT a.* FROM assets a JOIN sites s ON s.id=a.site_id
+                """SELECT a.id, a.site_id, a.ip, a.mac, a.hostname, a.vendor,
+                    a.status, a.discovery_reason, a.hostnames_json, a.source,
+                    a.first_seen, a.last_seen
+                FROM assets a JOIN sites s ON s.id=a.site_id
                 WHERE s.name=? ORDER BY a.ip""", (site,)
             ).fetchall()
             return [dict(row) for row in rows]
@@ -216,7 +266,9 @@ class Repository:
         safe_limit = max(1, min(limit, 500))
         with self.connect() as connection:
             rows = connection.execute(
-                "SELECT * FROM scans ORDER BY started_at DESC LIMIT ?", (safe_limit,)
+                """SELECT id, site_id, level, profile, target, simulation, authorized,
+                    status, started_at, finished_at, assets_found, cancelled, error
+                FROM scans ORDER BY started_at DESC LIMIT ?""", (safe_limit,)
             ).fetchall()
             return [dict(row) for row in rows]
 
@@ -229,7 +281,7 @@ class Repository:
             return [dict(row) for row in rows]
 
     def counts(self) -> dict[str, int]:
-        names = ("sites", "scans", "assets", "findings", "audit_log")
+        names = ("sites", "scans", "assets", "audit_log")
         with self.connect() as connection:
             return {
                 name: int(connection.execute(f"SELECT COUNT(*) FROM {name}").fetchone()[0])

@@ -16,16 +16,19 @@ if ! command -v nmap >/dev/null 2>&1; then
   exit 1
 fi
 
-if [[ ! -x "$venv_dir/bin/python" ]]; then
+if [[ ! -x "$venv_dir/bin/python" ]] || ! "$venv_dir/bin/python" -m pip --version >/dev/null 2>&1; then
   echo "Creating Kali demo virtual environment..."
-  python3 -m venv "$venv_dir"
+  python3 -m venv --clear "$venv_dir" || {
+    echo "Could not create a complete environment. Run: sudo apt install python3-venv python3-pip" >&2
+    exit 1
+  }
 fi
 
 "$venv_dir/bin/python" -m pip install --quiet --upgrade pip
 "$venv_dir/bin/python" -m pip install --quiet --editable "$project_root"
 
 echo "Pi-OT Kali demo: http://127.0.0.1:$port"
-echo "Simulation only. No network probes will be sent. Press Ctrl+C to stop."
+echo "Authorized local scans can send rate-limited probes. Press Ctrl+C to stop."
 exec "$venv_dir/bin/python" -m uvicorn kali_demo.app:app \
   --app-dir "$project_root" \
   --host 127.0.0.1 \
