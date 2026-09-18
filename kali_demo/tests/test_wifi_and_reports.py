@@ -52,6 +52,10 @@ class ReportTests(unittest.TestCase):
         self.assertIn("192.168.1.10", csv_document)
         self.assertIn("services", csv_document.splitlines()[0])
 
+    def test_csv_neutralizes_spreadsheet_formulas(self) -> None:
+        document = assets_csv({"assets": [{"ip": "192.168.1.10", "hostname": "=CMD()"}]})
+        self.assertIn("'=CMD()", document)
+
 
 if __name__ == "__main__":
     unittest.main()

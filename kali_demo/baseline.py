@@ -1,8 +1,9 @@
-"""V3 site baseline snapshots and evidence-based change comparison."""
+"""Site baseline snapshots and raw observation comparison."""
 
 from __future__ import annotations
 
 import json
+from collections import Counter
 from typing import Any
 
 from pi_ot_probe.core.models import utc_now
@@ -34,13 +35,42 @@ class BaselineManager:
     @staticmethod
     def _asset_snapshots(connection: Any, site_id: int, scan_id: str) -> list[dict[str, Any]]:
         rows = connection.execute(
-            """SELECT a.* FROM assets a JOIN scan_assets sa ON sa.asset_id=a.id
+            """SELECT a.*, sa.snapshot_json FROM assets a
+            JOIN scan_assets sa ON sa.asset_id=a.id
             WHERE a.site_id=? AND sa.scan_id=? ORDER BY a.ip""",
             (site_id, scan_id),
         ).fetchall()
         snapshots: list[dict[str, Any]] = []
         for row in rows:
             asset_id = int(row["id"])
+            raw_snapshot = row["snapshot_json"]
+            if raw_snapshot:
+                try:
+                    observed = json.loads(raw_snapshot)
+                except (json.JSONDecodeError, TypeError):
+                    observed = None
+                if isinstance(observed, dict):
+                    services = {
+                        f"{item.get('transport', 'tcp')}/{item.get('port')}": item.get("name", "unknown")
+                        for item in observed.get("services", []) if isinstance(item, dict)
+                    }
+                    protocols = [
+                        str(item.get("name")) for item in observed.get("protocols", [])
+                        if isinstance(item, dict) and item.get("name")
+                    ]
+                    snapshots.append({
+                        "kind": "asset",
+                        "_asset_id": asset_id,
+                        "ip": observed.get("ip", row["ip"]),
+                        "mac": observed.get("mac"),
+                        "hostname": observed.get("hostname"),
+                        "vendor": observed.get("vendor"),
+                        "device_type": observed.get("device_type", "unknown"),
+                        "ports": sorted(set(observed.get("ports", []))),
+                        "services": services,
+                        "protocols": protocols,
+                    })
+                    continue
             ports = [int(item[0]) for item in connection.execute(
                 "SELECT port FROM ports WHERE asset_id=? ORDER BY port", (asset_id,)
             ).fetchall()]
@@ -55,6 +85,7 @@ class BaselineManager:
             ).fetchall()]
             snapshots.append({
                 "kind": "asset",
+                "_asset_id": asset_id,
                 "ip": row["ip"],
                 "mac": row["mac"],
                 "hostname": row["hostname"],
@@ -64,6 +95,61 @@ class BaselineManager:
                 "services": services,
                 "protocols": protocols,
             })
+        return snapshots
+
+    @classmethod
+    def _current_asset_snapshots(
+        cls, connection: Any, site_id: int, through_scan_id: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Build current state from the latest discovery plus later per-host checks."""
+        scan_limit = None
+        if through_scan_id:
+            scan_limit = connection.execute(
+                "SELECT rowid FROM scans WHERE id=? AND site_id=?",
+                (through_scan_id, site_id),
+            ).fetchone()
+            if not scan_limit:
+                raise ValueError("scan does not belong to the selected site")
+        query = """SELECT id, rowid FROM scans WHERE site_id=? AND level=1
+            AND status='completed'"""
+        parameters: list[Any] = [site_id]
+        if scan_limit:
+            query += " AND rowid<=?"
+            parameters.append(int(scan_limit["rowid"]))
+        discovery = connection.execute(query + " ORDER BY rowid DESC LIMIT 1", parameters).fetchone()
+        if not discovery:
+            return []
+        snapshots = cls._asset_snapshots(connection, site_id, str(discovery["id"]))
+        for snapshot in snapshots:
+            asset_id = snapshot.get("_asset_id")
+            verification_query = """SELECT sa.snapshot_json FROM scan_assets sa
+                JOIN scans sc ON sc.id=sa.scan_id WHERE sa.asset_id=? AND sc.site_id=?
+                AND sc.level=2 AND sc.status='completed' AND sc.rowid>?"""
+            verification_parameters: list[Any] = [asset_id, site_id, int(discovery["rowid"])]
+            if scan_limit:
+                verification_query += " AND sc.rowid<=?"
+                verification_parameters.append(int(scan_limit["rowid"]))
+            verification = connection.execute(
+                verification_query + " ORDER BY sc.rowid DESC LIMIT 1",
+                verification_parameters,
+            ).fetchone()
+            if not verification or not verification["snapshot_json"]:
+                continue
+            try:
+                observed = json.loads(verification["snapshot_json"])
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if not isinstance(observed, dict):
+                continue
+            snapshot["ports"] = sorted(set(observed.get("ports", [])))
+            snapshot["services"] = {
+                f"{item.get('transport', 'tcp')}/{item.get('port')}": item.get("name", "unknown")
+                for item in observed.get("services", []) if isinstance(item, dict)
+            }
+            snapshot["protocols"] = [
+                str(item.get("name")) for item in observed.get("protocols", [])
+                if isinstance(item, dict) and item.get("name")
+            ]
         return snapshots
 
     @staticmethod
@@ -88,7 +174,7 @@ class BaselineManager:
         with self.repository.connect() as connection:
             site_id = self._site_id(connection, site)
             scan_id = self._latest_discovery_scan(connection, site_id)
-            snapshots = self._asset_snapshots(connection, site_id, scan_id)
+            snapshots = self._current_asset_snapshots(connection, site_id)
             if not snapshots:
                 raise ValueError("the latest discovery has no assets to baseline")
             snapshots.extend(self._wifi_snapshots(connection, site_id))
@@ -99,6 +185,7 @@ class BaselineManager:
             )
             baseline_id = int(cursor.lastrowid)
             for snapshot in snapshots:
+                snapshot = {key: value for key, value in snapshot.items() if key != "_asset_id"}
                 if snapshot["kind"] == "asset":
                     identity = f"asset:{snapshot.get('mac') or snapshot['ip']}"
                 else:
@@ -154,13 +241,23 @@ class BaselineManager:
             ).fetchone()
             if not baseline:
                 return []
+            comparison_scan = connection.execute(
+                "SELECT level, status FROM scans WHERE id=? AND site_id=?",
+                (scan_id, site_id),
+            ).fetchone()
+            if not comparison_scan or comparison_scan["status"] != "completed":
+                return []
             stored = [json.loads(row[0]) for row in connection.execute(
                 "SELECT snapshot_json FROM baseline_assets WHERE baseline_id=?",
                 (baseline["id"],),
             ).fetchall()]
             old_assets = [item for item in stored if item.get("kind") == "asset"]
             old_wifi = [item for item in stored if item.get("kind") == "wifi"]
-            current_assets = self._asset_snapshots(connection, site_id, scan_id)
+            current_assets = (
+                self._asset_snapshots(connection, site_id, scan_id)
+                if int(comparison_scan["level"]) == 1
+                else self._current_asset_snapshots(connection, site_id, scan_id)
+            )
             current_wifi = self._wifi_snapshots(connection, site_id)
             changes: list[dict[str, object]] = []
             matched: set[int] = set()
@@ -173,19 +270,41 @@ class BaselineManager:
                     **details,
                 })
 
-            for old in old_assets:
-                match_index = next((index for index, current in enumerate(current_assets)
-                    if index not in matched and old.get("mac") and current.get("mac") == old.get("mac")), None)
-                if match_index is None:
-                    match_index = next((index for index, current in enumerate(current_assets)
-                        if index not in matched and current.get("ip") == old.get("ip")), None)
+            def mac_key(asset: dict[str, Any]) -> str | None:
+                value = asset.get("mac")
+                return str(value).replace("-", ":").upper() if value else None
+
+            # Reserve all unambiguous MAC matches before IP fallback: a reused
+            # address must not steal a device that moved elsewhere through DHCP.
+            old_counts = Counter(mac_key(item) for item in old_assets)
+            current_counts = Counter(mac_key(item) for item in current_assets)
+            matches: dict[int, int] = {}
+            for old_index, old in enumerate(old_assets):
+                key = mac_key(old)
+                if key and old_counts[key] == current_counts[key] == 1:
+                    index = next(i for i, item in enumerate(current_assets) if mac_key(item) == key)
+                    matches[old_index] = index
+                    matched.add(index)
+            for old_index, old in enumerate(old_assets):
+                if old_index in matches:
+                    continue
+                index = next((i for i, item in enumerate(current_assets)
+                              if i not in matched and item.get("ip") == old.get("ip")), None)
+                if index is not None:
+                    matches[old_index] = index
+                    matched.add(index)
+
+            for old_index, old in enumerate(old_assets):
+                match_index = matches.get(old_index)
                 identity = str(old.get("mac") or old.get("ip"))
                 if match_index is None:
                     record("device_removed", identity, f"Device {old.get('ip')} was not observed")
                     continue
                 matched.add(match_index)
                 current = current_assets[match_index]
-                if old.get("ip") != current.get("ip") or old.get("mac") != current.get("mac"):
+                mac_changed = bool(mac_key(old) and mac_key(current)
+                                   and mac_key(old) != mac_key(current))
+                if old.get("ip") != current.get("ip") or mac_changed:
                     record("mac_ip_changed", identity, "Device network identity changed",
                            previous_ip=old.get("ip"), current_ip=current.get("ip"),
                            previous_mac=old.get("mac"), current_mac=current.get("mac"))
@@ -235,9 +354,10 @@ class BaselineManager:
                 else:
                     connection.execute(
                         """INSERT INTO changes(site_id, scan_id, change_type, asset_identity,
-                        details_json, detected_at) VALUES (?, ?, ?, ?, ?, ?)""",
+                        details_json, detected_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)""",
                         (site_id, scan_id, change["change_type"], change["asset_identity"],
-                         json.dumps(change, sort_keys=True), detected_at),
+                         json.dumps(change, sort_keys=True), detected_at, detected_at),
                     )
             return changes
 
@@ -250,8 +370,27 @@ class BaselineManager:
     def acknowledge(self, site: str, change_id: int) -> bool:
         with self.repository.connect() as connection:
             cursor = connection.execute(
-                """UPDATE changes SET acknowledged_at=? WHERE id=? AND site_id=(
+                """UPDATE changes SET acknowledged_at=?, triage_status='benign_change',
+                    updated_at=? WHERE id=? AND site_id=(
                     SELECT id FROM sites WHERE name=?)""",
-                (utc_now().isoformat(), change_id, site),
+                (utc_now().isoformat(), utc_now().isoformat(), change_id, site),
+            )
+            return cursor.rowcount == 1
+
+    def triage(self, site: str, change_id: int, status: str, note: str) -> bool:
+        allowed = {"new", "investigating", "benign_change", "confirmed", "remediated"}
+        if status not in allowed:
+            raise ValueError("invalid triage status")
+        normalized_note = note.strip()
+        if len(normalized_note) > 2000:
+            raise ValueError("analyst note must be 2000 characters or fewer")
+        now = utc_now().isoformat()
+        acknowledged_at = now if status in {"benign_change", "remediated"} else None
+        with self.repository.connect() as connection:
+            cursor = connection.execute(
+                """UPDATE changes SET triage_status=?, analyst_note=?, updated_at=?,
+                    acknowledged_at=COALESCE(?, acknowledged_at) WHERE id=? AND site_id=(
+                    SELECT id FROM sites WHERE name=?)""",
+                (status, normalized_note or None, now, acknowledged_at, change_id, site),
             )
             return cursor.rowcount == 1

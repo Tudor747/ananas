@@ -1,8 +1,10 @@
 # Raw network inventory and website inspector
 
 This is a separate, local browser application for safe Pi-OT Security Probe
-host discovery. It detects active private IPv4 interfaces, lets the operator
-select one local subnet, and stores real responding devices in SQLite.
+host discovery. Its tabbed analyst workspace separates overview, change
+review, controlled validation, current evidence, and scan history. It
+detects active private IPv4 interfaces, lets the operator select one local
+subnet, and stores real responding devices in SQLite.
 
 The default scan is deliberately limited to Nmap host discovery (`-sn`). It
 also provides an optional **Check 20 TCP ports** action for one selected asset. It
@@ -24,6 +26,35 @@ metadata when a discovered website is explicitly inspected.
 Named site baselines provide automatic comparison after discovery, new and
 removed device detection, MAC/IP and new-port changes, Wi-Fi AP inventory,
 change acknowledgement, and downloadable JSON/CSV reports.
+
+Per-scan asset snapshots keep historical evidence from changing when an asset
+is checked again. Only assets from the latest completed discovery are shown as
+current, cancelled scans never produce removal signals, and service evidence is
+shown as not checked after a new discovery until the host is verified again.
+
+The Change Review workspace presents the observed differences without assigning
+a score or severity. It supports New, Investigating, Confirmed observation,
+Expected change, and Resolved states with analyst notes. The Validation Lab is
+a controlled view over the bounded collectors; planned OT identity checks
+remain visibly disabled.
+
+## Developer map
+
+The application is split by responsibility so a manual edit has one obvious
+home:
+
+- `app.py` coordinates scans and defines the local HTTP routes.
+- `contracts.py` contains validated API request bodies.
+- `state_builder.py` converts immutable SQLite observations into dashboard data.
+- `scenarios.py` contains the descriptions shown in Validation Lab.
+- `real_scanner.py`, `wifi_inventory.py`, and `web_inspector.py` are collectors.
+- `baseline.py` compares observations; `reports.py` creates raw exports.
+- `static/app.js` handles user actions, `static/api.js` handles HTTP calls,
+  `static/renderers.js` builds views, and `static/dom.js` contains DOM helpers.
+
+Keep raw collector fields in the database/state path even when the interface
+does not yet display them. Add presentation wording in the renderer instead of
+turning missing evidence into a guessed value.
 
 ## Start on Kali
 
@@ -74,6 +105,25 @@ another interface. It has no user authentication because it is designed solely
 for a single local Kali operator.
 
 ## Test without opening a browser
+
+For actual results from your own computer, run this from the repository root:
+
+```powershell
+python -m kali_demo.local_check
+```
+
+This reads the current local interfaces, starts a temporary HTTP server bound
+to `127.0.0.1`, collects its HTTP response using the real inspector, and uses
+Nmap to check that server's single TCP port. It closes the server afterward.
+No Raspberry Pi, OT equipment, or subnet scan is needed. The server is a
+controlled local test endpoint, not an observation of an external device.
+
+Actual interface data, HTTP headers (with cookies redacted), the Nmap command,
+and raw Nmap XML are saved in `kali_demo/data/local-check.json`.
+Each check reports passed, failed, or skipped; unavailable Nmap is explicitly
+skipped. Exit codes are 0 for passed, 1 for failed, and 2 for partial results.
+Use `--output path/to/report.json` to save another report. This check covers
+plain HTTP and TCP; it does not verify TLS, Wi-Fi, or OT protocols.
 
 From the project root, with the project dependencies installed:
 

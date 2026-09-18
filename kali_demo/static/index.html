@@ -3,72 +3,216 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Pi-OT Probe // Raw Network Inventory</title>
+  <title>Pi-OT Probe // Analyst Workspace</title>
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
   <header class="topbar">
-    <div><p class="eyebrow">PI-OT SECURITY PROBE</p><h1>Raw network inventory</h1></div>
-    <div class="safe-badge"><span></span> LOCAL / OBSERVATIONS ONLY</div>
-  </header>
-  <main>
-    <section class="hero panel">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">P</div>
       <div>
-        <p class="eyebrow">AUTHORIZED LOCAL DISCOVERY</p>
-        <h2>See what your computer can directly observe on your network.</h2>
-        <p class="muted">No risk scores and no vulnerability claims. Host discovery records responding devices, addresses, hostnames and discovery evidence. Optional service checks inspect 20 common TCP ports on one device; observed web ports can then return raw HTTP/TLS metadata. Missing values are shown as not observed.</p>
+        <p class="eyebrow">PI-OT SECURITY PROBE</p>
+        <h1>Analyst workspace</h1>
       </div>
-      <div class="controls">
+    </div>
+    <div class="safe-badge"><span></span> LOCAL / BOUNDED TRAFFIC</div>
+  </header>
+
+  <nav class="workspace-tabs" role="tablist" aria-label="Analysis workspaces">
+    <button class="tab-button active" type="button" role="tab" aria-selected="true" data-tab="overview">Overview</button>
+    <button class="tab-button" type="button" role="tab" aria-selected="false" data-tab="change-review">Change Review <span id="change-tab-count" class="tab-count">0</span></button>
+    <button class="tab-button validation-tab" type="button" role="tab" aria-selected="false" data-tab="validation">Validation Lab</button>
+    <button class="tab-button" type="button" role="tab" aria-selected="false" data-tab="evidence">Assets &amp; Evidence</button>
+    <button class="tab-button" type="button" role="tab" aria-selected="false" data-tab="history">History &amp; Reports</button>
+  </nav>
+
+  <main>
+    <section class="command-bar panel" aria-label="Authorized scan controls">
+      <div class="command-target">
         <label for="network">Local private network</label>
         <select id="network" disabled><option>Detecting interfaces...</option></select>
-        <label class="authorization"><input id="authorized" type="checkbox"> I own this network or have permission to inspect it</label>
-        <button id="run-button" type="button" disabled>Discover devices</button>
-        <button id="cancel-button" class="secondary" type="button" disabled>Cancel operation</button>
       </div>
+      <label class="authorization">
+        <input id="authorized" type="checkbox">
+        I own this network or have permission to assess it
+      </label>
+      <button id="run-button" type="button" disabled>Discover devices</button>
+      <button id="cancel-button" class="secondary" type="button" disabled>Cancel</button>
     </section>
     <div id="status" class="status" role="status">Detecting safe local network targets...</div>
-    <section class="metrics" aria-label="Inventory totals">
-      <article><span id="metric-assets">0</span><small>Devices observed</small></article>
-      <article><span id="metric-services">0</span><small>Open ports observed</small></article>
-      <article><span id="metric-wifi">0</span><small>Wi-Fi radios</small></article>
-      <article><span id="metric-changes">0</span><small>Baseline changes</small></article>
+
+    <section id="tab-overview" class="tab-panel active" role="tabpanel">
+      <section class="hero panel">
+        <div>
+          <p class="eyebrow">CURRENT RAW INVENTORY</p>
+          <h2>Understand the environment before deciding what needs investigation.</h2>
+          <p class="muted">Current observations, analyst decisions, and controlled checks are kept separate. Missing data means not observed, not absent. Active checks remain single-purpose and bounded.</p>
+        </div>
+        <div class="scope-card">
+          <span class="scope-label">CURRENT SITE</span>
+          <strong id="current-site">No discovery yet</strong>
+          <small id="current-mode">Ready for local inventory</small>
+        </div>
+      </section>
+
+      <section class="metrics" aria-label="Inventory totals">
+        <article><span id="metric-assets">0</span><small>Current devices</small></article>
+        <article><span id="metric-services">0</span><small>Verified open ports</small></article>
+        <article><span id="metric-wifi">0</span><small>Wi-Fi radios</small></article>
+        <article><span id="metric-changes">0</span><small>Changes awaiting review</small></article>
+      </section>
+
+      <section class="overview-grid">
+        <article class="panel posture-panel">
+          <p class="eyebrow">START HERE</p>
+          <h2>Recommended workflow</h2>
+          <ol class="workflow-list">
+            <li><span>01</span><div><strong>Establish visibility</strong><small>Run discovery and review what was actually observed.</small></div></li>
+            <li><span>02</span><div><strong>Create a trusted baseline</strong><small>Record the approved environment after validation.</small></div></li>
+            <li><span>03</span><div><strong>Review differences</strong><small>Document whether each change is expected or unexplained.</small></div></li>
+            <li><span>04</span><div><strong>Validate safely</strong><small>Use bounded checks only against approved devices.</small></div></li>
+          </ol>
+        </article>
+        <article class="panel posture-panel">
+          <p class="eyebrow">BASELINE STATUS</p>
+          <h2>Known-good reference</h2>
+          <p id="baseline-status" class="muted">No active baseline.</p>
+          <button class="text-button" type="button" data-open-tab="history">Manage baseline and reports -&gt;</button>
+        </article>
+      </section>
     </section>
-    <section class="panel action-panel">
-      <div><p class="eyebrow">HISTORY</p><h2>Baseline and raw exports</h2><p id="baseline-status" class="muted">No active baseline.</p></div>
-      <div class="action-controls">
-        <input id="baseline-name" maxlength="100" value="Site baseline" aria-label="Baseline name">
-        <button id="baseline-button" type="button">Create baseline</button>
-        <button id="wifi-button" class="secondary-safe" type="button">Refresh Wi-Fi inventory</button>
-        <a class="button-link" href="/api/reports/site.json">Download all data (JSON)</a>
-        <a class="button-link" href="/api/reports/assets.csv">Devices (CSV)</a>
+
+    <section id="tab-change-review" class="tab-panel" role="tabpanel" hidden>
+      <div class="workspace-heading">
+        <div>
+          <p class="eyebrow">CHANGE REVIEW</p>
+          <h2>Baseline differences</h2>
+          <p class="muted">Review raw evidence, record a decision, and keep unresolved changes visible.</p>
+        </div>
       </div>
+      <section class="review-metrics metrics compact">
+        <article><span id="change-new-count">0</span><small>New</small></article>
+        <article><span id="change-investigating-count">0</span><small>Investigating</small></article>
+        <article><span id="change-confirmed-count">0</span><small>Confirmed observations</small></article>
+        <article><span id="change-closed-count">0</span><small>Closed</small></article>
+      </section>
+      <section class="review-layout">
+        <article class="panel">
+          <div class="section-heading">
+            <div><p class="eyebrow">REVIEW QUEUE</p><h2>Observed changes</h2></div>
+            <select id="change-filter" aria-label="Filter changes">
+              <option value="open">Awaiting review</option>
+              <option value="all">All changes</option>
+              <option value="confirmed">Confirmed observations</option>
+            </select>
+          </div>
+          <div id="changes" class="stack"></div>
+        </article>
+        <aside class="panel analyst-guide">
+          <p class="eyebrow">REVIEW CHECKLIST</p>
+          <h2>Verify before deciding</h2>
+          <ul>
+            <li>Is the observation from a complete, successful scan?</li>
+            <li>Was there an approved maintenance or network change?</li>
+            <li>Does the identity match the expected device and zone?</li>
+            <li>Can another source confirm the observation?</li>
+          </ul>
+          <p class="callout">A difference is evidence of change, not proof of a security problem.</p>
+        </aside>
+      </section>
     </section>
-    <section class="panel wide-block">
-      <div class="section-heading"><div><p class="eyebrow">WIRED / IP INVENTORY</p><h2>Observed devices</h2></div><span id="asset-count" class="counter">0</span></div>
-      <p class="section-help">Hostname, MAC and vendor are shown only when the network or Nmap supplied them. Open “Raw details” for timestamps, sources, service evidence and every retained field.</p>
-      <div class="table-wrap"><table>
-        <thead><tr><th>IP address</th><th>Hostname</th><th>MAC / vendor</th><th>Observed services</th><th>Evidence</th><th>Action</th></tr></thead>
-        <tbody id="assets-body"></tbody>
-      </table></div>
+
+    <section id="tab-validation" class="tab-panel" role="tabpanel" hidden>
+      <div class="workspace-heading red-heading">
+        <div>
+          <p class="eyebrow red-copy">CONTROLLED VALIDATION</p>
+          <h2>Validation Lab</h2>
+          <p class="muted">Generate small, known behaviors to verify that inventory and comparison logic can observe them. No exploitation, credential attacks, or denial-of-service actions are provided.</p>
+        </div>
+        <span class="level-chip">MAXIMUM CHECK LEVEL: 2 / VERIFY</span>
+      </div>
+      <section class="panel authorization-gate">
+        <div>
+          <p class="eyebrow red-copy">AUTHORIZATION</p>
+          <h2>Permission is required for every active check</h2>
+          <p class="muted">Targets remain limited to an attached private network. Service validation checks one discovered host and 20 TCP ports.</p>
+        </div>
+        <div class="red-action-box">
+          <label for="red-target">Discovered target</label>
+          <select id="red-target" disabled><option>No discovered devices</option></select>
+          <button id="red-verify-button" class="danger-safe" type="button" disabled>Run single-host service validation</button>
+        </div>
+      </section>
+      <div id="red-scenarios" class="scenario-grid"></div>
     </section>
-    <section class="panel wide-block">
-      <div class="section-heading"><div><p class="eyebrow">RADIO INVENTORY</p><h2>Wi-Fi access points</h2></div></div>
-      <p class="section-help">An SSID is the network name; a BSSID identifies one access-point radio. Signal in dBm is estimated when the operating system supplies only a percentage.</p>
-      <div class="table-wrap"><table>
-        <thead><tr><th>SSID</th><th>BSSID</th><th>Signal</th><th>Channel / band</th><th>Authentication / cipher</th><th>Radio details</th></tr></thead>
-        <tbody id="wifi-body"></tbody>
-      </table></div>
+
+    <section id="tab-evidence" class="tab-panel" role="tabpanel" hidden>
+      <div class="workspace-heading">
+        <div>
+          <p class="eyebrow">CURRENT EVIDENCE</p>
+          <h2>Assets and network metadata</h2>
+          <p class="muted">Only devices from the latest completed discovery appear as current. Service evidence resets to "not checked" after a new discovery until that host is verified again.</p>
+        </div>
+      </div>
+      <section class="panel wide-block">
+        <div class="section-heading">
+          <div><p class="eyebrow">IP INVENTORY</p><h2>Observed devices</h2></div>
+          <span id="asset-count" class="counter">0</span>
+        </div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>IP address</th><th>Hostname</th><th>MAC / vendor</th><th>Verified services</th><th>Evidence</th><th>Action</th></tr></thead>
+          <tbody id="assets-body"></tbody>
+        </table></div>
+      </section>
+      <section class="panel wide-block">
+        <div class="section-heading">
+          <div><p class="eyebrow">RADIO INVENTORY</p><h2>Wi-Fi access points</h2></div>
+          <button id="wifi-button" class="small-button secondary-safe" type="button">Refresh Wi-Fi</button>
+        </div>
+        <p class="section-help">A BSSID identifies one access-point radio. Signal in dBm is estimated when the operating system supplies only a percentage.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>SSID</th><th>BSSID</th><th>Signal</th><th>Channel / band</th><th>Authentication / cipher</th><th>Radio details</th></tr></thead>
+          <tbody id="wifi-body"></tbody>
+        </table></div>
+      </section>
     </section>
-    <section class="grid">
-      <article class="panel"><div class="section-heading"><div><p class="eyebrow">BASELINE</p><h2>Observed changes</h2></div></div><div id="changes" class="stack"></div></article>
-      <article class="panel"><div class="section-heading"><div><p class="eyebrow">AUDIT TRAIL</p><h2>Recent scans</h2></div></div><div id="scans" class="stack"></div></article>
-    </section>
-    <section class="panel limits">
-      <p class="eyebrow">HOW TO READ MISSING DATA</p><h2>“Not observed” does not mean “does not exist.”</h2>
-      <p class="muted">A device can block discovery, DNS may have no hostname, MAC addresses normally stay inside the local segment, and operating systems expose different Wi-Fi fields. Service verification checks only the selected device and 20 common TCP ports; it is not a complete 65,535-port scan.</p>
+
+    <section id="tab-history" class="tab-panel" role="tabpanel" hidden>
+      <div class="workspace-heading">
+        <div>
+          <p class="eyebrow">HISTORY / GOVERNANCE</p>
+          <h2>Baselines, scans, and exports</h2>
+          <p class="muted">Create a reference only after reviewing the current inventory. Previous baselines remain preserved in the database.</p>
+        </div>
+      </div>
+      <section class="panel action-panel">
+        <div>
+          <p class="eyebrow">KNOWN-GOOD STATE</p>
+          <h2>Create a new active baseline</h2>
+          <p class="muted">Captures current discovered assets, verified services, and Wi-Fi observations.</p>
+        </div>
+        <div class="action-controls">
+          <input id="baseline-name" maxlength="100" value="Site baseline" aria-label="Baseline name">
+          <button id="baseline-button" type="button">Create baseline</button>
+          <a class="button-link" href="/api/reports/site.json">Download JSON</a>
+          <a class="button-link" href="/api/reports/assets.csv">Devices CSV</a>
+        </div>
+      </section>
+      <section class="grid">
+        <article class="panel">
+          <div class="section-heading"><div><p class="eyebrow">AUDIT TRAIL</p><h2>Recent scans</h2></div></div>
+          <div id="scans" class="stack"></div>
+        </article>
+        <article class="panel limits">
+          <p class="eyebrow">EVIDENCE SEMANTICS</p>
+          <h2>Not observed does not mean absent.</h2>
+          <p class="muted">A host can block discovery, DNS may lack a hostname, and MAC addresses normally stay inside the local segment. Verification covers only one selected device and 20 common TCP ports.</p>
+        </article>
+      </section>
     </section>
   </main>
-  <footer>LOCALHOST APP / RAW EVIDENCE / SAFE BOUNDED CHECKS / NO RISK SCORING</footer>
-  <script src="/static/app.js" defer></script>
+
+  <footer>LOCALHOST APP / IMMUTABLE SCAN SNAPSHOTS / AUTHORIZED BOUNDED CHECKS</footer>
+  <script src="/static/app.js" type="module"></script>
 </body>
 </html>

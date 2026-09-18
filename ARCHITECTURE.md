@@ -97,10 +97,20 @@ protocols, APs, web observations, scan results, legacy findings/score storage, b
 changes, capture metadata, signed update packs, and the audit log. Every dynamic
 value is passed as a query parameter. Foreign keys are enabled per connection.
 
-Asset identity is currently `(site, IP)` for the first runnable slice. Phase 3
-must introduce baseline identity reconciliation using MAC, IP, hostname, and
-confidence so DHCP changes are represented correctly rather than overwriting
-history.
+`scan_assets.snapshot_json` retains the exact asset observation produced by a
+collector. The analyst workspace derives current devices from the latest
+completed discovery and overlays only verification evidence collected after
+that discovery. Baselines read these immutable snapshots instead of mutable
+asset rows. Change records also retain review state and an analyst note. A
+legacy severity column remains for database migration compatibility, but the
+raw-data dashboard does not calculate or present scores or severity.
+
+Asset storage identity is currently `(site, IP)`. Baseline comparison reserves
+unique, case-normalized MAC matches before falling back to IP, so an address
+reassignment cannot steal a match from a device that moved. Missing MAC
+evidence is not treated as a MAC change. Cross-scan persistent device identity
+and confidence-based reconciliation remain future work; hostnames alone do
+not establish device identity.
 
 ## Appliance security model
 

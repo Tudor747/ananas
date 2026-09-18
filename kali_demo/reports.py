@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 from io import StringIO
+import json
 from typing import Any
 
 from pi_ot_probe.core.models import utc_now
@@ -35,6 +36,9 @@ def assets_csv(state: dict[str, Any]) -> str:
     for asset in state.get("assets", []):
         row = dict(asset)
         for field in ("hostnames", "ports", "services", "protocols"):
-            row[field] = str(row.get(field, []))
+            row[field] = json.dumps(row.get(field, []), sort_keys=True)
+        for field, value in row.items():
+            if isinstance(value, str) and value.lstrip().startswith(("=", "+", "-", "@")):
+                row[field] = "'" + value
         writer.writerow(row)
     return output.getvalue()

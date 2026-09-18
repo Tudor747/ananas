@@ -80,8 +80,9 @@ It binds to `127.0.0.1:8080` by default. Send the token as
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for components, data flow, scan levels,
 hardware abstraction, persistence, security controls, and phased boundaries.
-The separate `kali_demo/` engineering console now contains the V2/V3 preview:
+The separate `kali_demo/` analyst workspace contains the current local preview:
 cross-platform real host discovery, confirmed single-host service checks, raw
-HTTP/TLS metadata, site baselines, change history, detailed Wi-Fi AP inventory,
-and JSON/CSV reports. GPIO, packet capture, and active OT protocol handshakes
-remain deferred.
+HTTP/TLS metadata, immutable per-scan asset snapshots, site baselines, a basic
+change-review queue, a controlled Validation Lab, detailed Wi-Fi AP inventory, and
+JSON/CSV reports. GPIO, packet capture, and active OT protocol handshakes remain
+deferred.

@@ -125,6 +125,7 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         scan_id TEXT NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
         asset_id INTEGER NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
         observed_at TEXT NOT NULL,
+        snapshot_json TEXT,
         PRIMARY KEY(scan_id, asset_id)
     )""",
     """CREATE TABLE IF NOT EXISTS findings (
@@ -158,7 +159,9 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         site_id INTEGER NOT NULL REFERENCES sites(id), scan_id TEXT REFERENCES scans(id),
         change_type TEXT NOT NULL, asset_identity TEXT, details_json TEXT NOT NULL,
-        detected_at TEXT NOT NULL, acknowledged_at TEXT
+        detected_at TEXT NOT NULL, acknowledged_at TEXT,
+        triage_status TEXT NOT NULL DEFAULT 'new',
+        severity TEXT NOT NULL DEFAULT 'medium', analyst_note TEXT, updated_at TEXT
     )""",
     """CREATE TABLE IF NOT EXISTS update_packs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,

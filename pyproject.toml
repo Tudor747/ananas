@@ -23,4 +23,4 @@ pi-ot-probe = "pi_ot_probe.main:main"
 include = ["pi_ot_probe*"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "kali_demo/tests"]

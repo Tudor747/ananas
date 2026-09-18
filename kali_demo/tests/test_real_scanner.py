@@ -12,7 +12,17 @@ from kali_demo.real_scanner import (
     LocalNetwork, parse_nmap_xml, parse_service_xml,
     parse_windows_interface_json, validate_target, discover_local_networks,
 )
-from pi_ot_probe.core.models import Asset, ScanLevel, ScanProgress, Service, WifiAccessPoint
+from pi_ot_probe.core.models import (
+    Asset,
+    Scan,
+    ScanLevel,
+    ScanProfile,
+    ScanProgress,
+    ScanStatus,
+    Service,
+    WifiAccessPoint,
+    utc_now,
+)
 from pi_ot_probe.scanners.base import CancellationToken, ScanContext, Scanner
 from kali_demo.web_inspector import WebObservation
 
@@ -192,6 +202,90 @@ class RealDiscoveryServiceTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(state["assets"][0]["ports"][0]["port"], 23)
             self.assertEqual(state["assets"][0]["services"][0]["name"], "telnet")
             self.assertNotIn("findings", state)
+            self.assertNotIn("risk_score", state["assets"][0])
+
+    async def test_new_discovery_resets_current_service_evidence(self) -> None:
+        local = [LocalNetwork("eth0", "192.168.50.10", "192.168.50.0/24", "192.168.50.0/24")]
+        with tempfile.TemporaryDirectory() as directory:
+            service = DemoService(Path(directory) / "demo.db")
+            with (
+                patch("kali_demo.app.discover_local_networks", new=AsyncMock(return_value=local)),
+                patch("kali_demo.app.NmapDiscoveryScanner", FakeNmapScanner),
+            ):
+                await service.run_real("192.168.50.0/24", True)
+            with (
+                patch("kali_demo.app.discover_local_networks", new=AsyncMock(return_value=local)),
+                patch("kali_demo.app.NmapServiceScanner", FakeServiceScanner),
+            ):
+                await service.verify_services("192.168.50.1", True)
+            self.assertEqual(service.state()["assets"][0]["ports"][0]["port"], 23)
+
+            with (
+                patch("kali_demo.app.discover_local_networks", new=AsyncMock(return_value=local)),
+                patch("kali_demo.app.NmapDiscoveryScanner", FakeNmapScanner),
+            ):
+                await service.run_real("192.168.50.0/24", True)
+
+            current = service.state()["assets"][0]
+            self.assertEqual(current["ports"], [])
+            self.assertEqual(current["services"], [])
+
+    async def test_failed_scan_does_not_replace_current_discovery(self) -> None:
+        local = [LocalNetwork(
+            "eth0", "192.168.50.10", "192.168.50.0/24", "192.168.50.0/24"
+        )]
+        with tempfile.TemporaryDirectory() as directory:
+            service = DemoService(Path(directory) / "demo.db")
+            with (
+                patch("kali_demo.app.discover_local_networks", new=AsyncMock(return_value=local)),
+                patch("kali_demo.app.NmapDiscoveryScanner", FakeNmapScanner),
+            ):
+                await service.run_real("192.168.50.0/24", True)
+
+            now = utc_now()
+            failed_site = service.repository.ensure_site("FAILED_SITE", now)
+            failed_scan = Scan(
+                site="FAILED_SITE",
+                level=ScanLevel.DISCOVERY,
+                profile=ScanProfile.INDUSTRIAL,
+                target="192.168.60.0/24",
+                status=ScanStatus.FAILED,
+                started_at=now,
+                finished_at=now,
+                error="test failure",
+            )
+            service.repository.create_scan(failed_scan, failed_site)
+
+            state = service.state()
+            site, asset = service._load_current_asset("192.168.50.1")
+            self.assertEqual(state["current_site"], "KALI_REAL_192.168.50.0_24")
+            self.assertEqual(site, state["current_site"])
+            self.assertEqual(asset.ip, "192.168.50.1")
+
+    async def test_service_change_enters_review_queue_and_can_be_triaged(self) -> None:
+        local = [LocalNetwork("eth0", "192.168.50.10", "192.168.50.0/24", "192.168.50.0/24")]
+        with tempfile.TemporaryDirectory() as directory:
+            service = DemoService(Path(directory) / "demo.db")
+            with (
+                patch("kali_demo.app.discover_local_networks", new=AsyncMock(return_value=local)),
+                patch("kali_demo.app.NmapDiscoveryScanner", FakeNmapScanner),
+            ):
+                await service.run_real("192.168.50.0/24", True)
+            service.create_baseline("Approved")
+            with (
+                patch("kali_demo.app.discover_local_networks", new=AsyncMock(return_value=local)),
+                patch("kali_demo.app.NmapServiceScanner", FakeServiceScanner),
+            ):
+                result = await service.verify_services("192.168.50.1", True)
+            self.assertEqual(result["changes"], 1)
+            change = service.state()["changes"][0]
+            self.assertEqual(change["change_type"], "new_port")
+            self.assertEqual(change["triage_status"], "new")
+            self.assertNotIn("severity", change)
+            self.assertTrue(service.triage_change(change["id"], "investigating", "Validate owner"))
+            updated = service.state()["changes"][0]
+            self.assertEqual(updated["triage_status"], "investigating")
+            self.assertEqual(updated["analyst_note"], "Validate owner")
 
     async def test_wifi_refresh_persists_aps_and_compares_with_baseline(self) -> None:
         local = [LocalNetwork("eth0", "192.168.50.10", "192.168.50.0/24", "192.168.50.0/24")]
@@ -243,6 +337,13 @@ class RealDiscoveryServiceTests(unittest.IsolatedAsyncioTestCase):
             )
             with self.assertRaises(ValueError):
                 await service.inspect_web("192.168.50.1", 80, "http", True)
+
+            with (
+                patch("kali_demo.app.discover_local_networks", new=AsyncMock(return_value=local)),
+                patch("kali_demo.app.NmapDiscoveryScanner", FakeNmapScanner),
+            ):
+                await service.run_real("192.168.50.0/24", True)
+            self.assertEqual(service.state()["assets"][0]["web_observations"], [])
 
 
 if __name__ == "__main__":

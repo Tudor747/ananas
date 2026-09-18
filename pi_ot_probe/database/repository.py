@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from dataclasses import asdict
 from datetime import datetime
 import json
 from pathlib import Path
@@ -15,6 +16,14 @@ from pi_ot_probe.database.models import SCHEMA_STATEMENTS
 
 def _iso(value: datetime | None) -> str | None:
     return value.isoformat() if value else None
+
+
+def _asset_snapshot(asset: Asset) -> str:
+    """Serialize the observation produced by one scanner without later mutation."""
+    payload = asdict(asset)
+    payload["first_seen"] = _iso(asset.first_seen)
+    payload["last_seen"] = _iso(asset.last_seen)
+    return json.dumps(payload, sort_keys=True)
 
 
 class Repository:
@@ -58,6 +67,15 @@ class Repository:
                     "band": "TEXT", "authentication": "TEXT", "cipher": "TEXT",
                     "radio_type": "TEXT", "network_type": "TEXT", "mode": "TEXT",
                     "rate": "TEXT", "source": "TEXT NOT NULL DEFAULT 'unknown'",
+                },
+                "scan_assets": {
+                    "snapshot_json": "TEXT",
+                },
+                "changes": {
+                    "triage_status": "TEXT NOT NULL DEFAULT 'new'",
+                    "severity": "TEXT NOT NULL DEFAULT 'medium'",
+                    "analyst_note": "TEXT",
+                    "updated_at": "TEXT",
                 },
             }
             for table, columns in migrations.items():
@@ -195,12 +213,18 @@ class Repository:
             finding.scan_id = scan_id
             return finding.id
 
-    def link_scan_asset(self, scan_id: str, asset_id: int, observed_at: datetime) -> None:
+    def link_scan_asset(
+        self, scan_id: str, asset_id: int, observed_at: datetime, asset: Asset | None = None
+    ) -> None:
         with self.connect() as connection:
             connection.execute(
-                """INSERT INTO scan_assets(scan_id, asset_id, observed_at) VALUES (?, ?, ?)
-                ON CONFLICT(scan_id, asset_id) DO UPDATE SET observed_at=excluded.observed_at""",
-                (scan_id, asset_id, observed_at.isoformat()),
+                """INSERT INTO scan_assets(scan_id, asset_id, observed_at, snapshot_json)
+                VALUES (?, ?, ?, ?) ON CONFLICT(scan_id, asset_id) DO UPDATE SET
+                observed_at=excluded.observed_at, snapshot_json=excluded.snapshot_json""",
+                (
+                    scan_id, asset_id, observed_at.isoformat(),
+                    _asset_snapshot(asset) if asset is not None else None,
+                ),
             )
 
     def upsert_access_point(self, site_id: int, access_point: WifiAccessPoint, observed_at: datetime) -> None:
@@ -246,7 +270,7 @@ class Repository:
                 """INSERT INTO audit_log(timestamp, user_action, scan_type, target,
                     profile, security_level, result, duration_ms, cancelled, errors)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (timestamp.isoformat(), user_action, "quick_audit", scan.target,
+                (timestamp.isoformat(), user_action, user_action, scan.target,
                  scan.profile.value, int(scan.level), result, duration_ms,
                  int(scan.cancelled), errors),
             )

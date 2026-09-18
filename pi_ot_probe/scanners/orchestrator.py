@@ -55,6 +55,7 @@ class ScanOrchestrator:
         scanner: Scanner,
         cancellation: CancellationToken,
         on_progress: ProgressCallback | None = None,
+        user_action: str | None = None,
     ) -> ScanOutcome:
         context = ScanContext(scan.site, scan.target, scan.level, scan.profile, scan.authorized)
         self._enforce_safety(context, scanner)
@@ -76,7 +77,9 @@ class ScanOrchestrator:
                         if self.analyze_risk and self.risk_engine is not None else []
                     )
                     asset_id = self.repository.upsert_asset(site_id, progress.asset)
-                    self.repository.link_scan_asset(scan.id, asset_id, progress.asset.last_seen)
+                    self.repository.link_scan_asset(
+                        scan.id, asset_id, progress.asset.last_seen, progress.asset
+                    )
                     for finding in asset_findings:
                         self.repository.add_finding(scan.id, asset_id, finding)
                     assets.append(progress.asset)
@@ -111,7 +114,7 @@ class ScanOrchestrator:
             duration_ms = round((perf_counter() - start) * 1000)
             self.repository.add_audit_entry(
                 timestamp=scan.finished_at,
-                user_action="quick_audit",
+                user_action=user_action or scanner.name,
                 scan=scan,
                 result=scan.status.value,
                 duration_ms=duration_ms,
