@@ -1,2 +1,2 @@
+# Compatibility helper: dependencies and package settings live at the repository root.
 -e ..
-

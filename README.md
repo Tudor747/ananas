@@ -1,88 +1,69 @@
 # Pi-OT Security Probe
 
-Safe Phase 1 foundation for an offline-first Raspberry Pi IoT/OT security
-appliance. The current Quick Audit uses synthetic data only and does not contact
-the network.
+A local website for real network inventory, bounded service checks, HTTP/TLS
+observations, Wi-Fi inventory, baselines, and change review. It displays raw
+evidence without inferred vulnerability scores. No Raspberry Pi is required.
 
-## Requirements
+## Start on Windows
 
-- Python 3.11 or newer
-- No third-party package is needed for the simulation CLI or unit tests
-- FastAPI and Uvicorn are needed only for the engineering API
-
-## Run the simulated Quick Audit
-
-From the repository root:
-
-```bash
-python -m pi_ot_probe quick-audit --simulation
-```
-
-This renders a mock 16x2 LCD, runs the `changed` scenario, and creates
-`data/pi_ot_probe.db`. Useful alternatives:
-
-```bash
-python -m pi_ot_probe quick-audit --simulation --scenario baseline
-python -m pi_ot_probe quick-audit --simulation --no-lcd --json
-SIMULATION_MODE=true python -m pi_ot_probe quick-audit
-```
-
-PowerShell environment syntax is:
+Install Python 3.11+ and Nmap. From PowerShell:
 
 ```powershell
-$env:SIMULATION_MODE = "true"
-python -m pi_ot_probe quick-audit
+cd D:\proiecte\ananas
+Set-ExecutionPolicy -Scope Process Bypass
+.\run.ps1
 ```
 
-The changed scenario contains five devices and synthetic examples of a new HMI,
-a removed historian, a new PLC web port, a duplicate SSID, and S7/Modbus
-observations. The active product path records raw evidence and does not calculate
-or display risk scores.
+Open **http://127.0.0.1:8088**. The launcher creates `.venv/` and installs the
+Python dependencies. Keep PowerShell open; press Ctrl+C to stop. To use another
+port, run `.\run.ps1 -Port 8090`. Nmap is needed for scans, not to open the UI.
 
-Press `Ctrl+C` to abort the CLI. Scanner implementations also receive a shared
-cancellation token and must check it between operations.
+On Linux, install Python, venv support, and Nmap, then run `bash run.sh`.
+See [usage](docs/usage.md) for detailed setup and collector limits.
 
-## Run tests
+## Find your way around
 
-```bash
-python -m unittest discover -s tests -v
+```text
+src/pi_ot_probe/       Python application and website assets
+  web/                App assembly, HTTP routes, request schemas, frontend
+  application/        Scan workflows, baselines, dashboard data
+  collectors/         Real OS, Nmap, Wi-Fi, and HTTP/TLS observations
+  domain/             Shared data objects (Asset, Scan, Service, ...)
+  database/           SQLite schema, persistence, snapshot queries
+  scanners/           Scanner contract, progress, cancellation, lifecycle
+  reports/            Export generation
+  config/             Settings, paths, logging, scan policies
+  diagnostics/        Live checks on your local computer
+  management_api/     Separate authenticated engineering API
+  simulation/         Explicit synthetic CLI example
+  hardware/           LCD/button contracts and terminal mocks
+  plugins/            Optional plugin contracts and registry
+  experimental/       Deferred adapters and legacy analysis
+tests/                Automated tests, including tests/web/
+docs/                 Usage, architecture, and learning guide
+scripts/              Environment/deployment helpers
+deployment/           Linux service configuration
+data/                 Local generated data (ignored by Git)
+kali_demo/            Compatibility entry points and existing local data
+run.ps1 / run.sh      Website launchers
+pyproject.toml        Package, dependency, and test configuration
 ```
 
-Or, after installing development requirements:
+Start learning with [the development guide](docs/development.md). It explains
+which files to edit and traces a button click through the application.
+See [architecture](docs/architecture.md) for boundaries and data flow.
 
-```bash
-python -m pip install -e ".[dev]"
-pytest
-```
-
-## Run the local engineering API
-
-Generate and export a private token; there is no default credential:
-
-```bash
-export PI_OT_API_TOKEN="replace-with-at-least-32-random-characters"
-python -m pi_ot_probe serve
-```
-
-PowerShell:
+## Test your changes
 
 ```powershell
-$env:PI_OT_API_TOKEN = "replace-with-at-least-32-random-characters"
-python -m pi_ot_probe serve
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -m pi_ot_probe.diagnostics.local_check
 ```
 
-It binds to `127.0.0.1:8080` by default. Send the token as
-`Authorization: Bearer <token>`. Configuration variables include
-`PI_OT_DATABASE`, `PI_OT_LOG_LEVEL`, `PI_OT_MANAGEMENT_HOST`, and
-`PI_OT_MANAGEMENT_PORT`.
+The last command saves actual local observations to `data/local-check.json`.
+It tests a temporary loopback HTTP server and one TCP port, not a subnet.
 
-## Repository map
-
-See [ARCHITECTURE.md](ARCHITECTURE.md) for components, data flow, scan levels,
-hardware abstraction, persistence, security controls, and phased boundaries.
-The separate `kali_demo/` analyst workspace contains the current local preview:
-cross-platform real host discovery, confirmed single-host service checks, raw
-HTTP/TLS metadata, immutable per-scan asset snapshots, site baselines, a basic
-change-review queue, a controlled Validation Lab, detailed Wi-Fi AP inventory, and
-JSON/CSV reports. GPIO, packet capture, and active OT protocol handshakes remain
-deferred.
+Existing `kali_demo/data/demo.db` is automatically reused. New installations
+write to `data/inventory.db`. Set `PI_OT_DEMO_DATABASE` to choose another path.
+The website is intended for one local operator and binds to `127.0.0.1`.

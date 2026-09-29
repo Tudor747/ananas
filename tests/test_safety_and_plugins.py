@@ -3,7 +3,7 @@ import tempfile
 from pathlib import Path
 import unittest
 
-from pi_ot_probe.core.models import Scan, ScanLevel, ScanProfile, ScanProgress
+from pi_ot_probe.domain.models import Scan, ScanLevel, ScanProfile, ScanProgress
 from pi_ot_probe.database.repository import Repository
 from pi_ot_probe.plugins.base import PluginMetadata, SecurityPlugin
 from pi_ot_probe.plugins.registry import PluginRegistry

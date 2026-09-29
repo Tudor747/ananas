@@ -1,6 +1,6 @@
 import unittest
 
-from pi_ot_probe.analysis.risk_engine import RiskEngine
+from pi_ot_probe.experimental.analysis.risk_engine import RiskEngine
 from pi_ot_probe.simulation.scanner import build_snapshot
 
 
@@ -14,7 +14,7 @@ class RiskEngineTests(unittest.TestCase):
         self.assertIn("502", finding.technical_reason)
 
     def test_legacy_open_port_is_reported_as_exposure_not_vulnerability(self) -> None:
-        from pi_ot_probe.core.models import Asset
+        from pi_ot_probe.domain.models import Asset
 
         finding = RiskEngine().evaluate(Asset(ip="192.168.1.5", ports=[23]))[0]
         self.assertEqual(finding.title, "TELNET-LIKELY PORT OPEN")

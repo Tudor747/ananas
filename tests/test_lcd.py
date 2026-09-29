@@ -1,7 +1,7 @@
 from io import StringIO
 import unittest
 
-from pi_ot_probe.ui.lcd import MockLCD
+from pi_ot_probe.hardware.lcd import MockLCD
 
 
 class MockLCDTests(unittest.TestCase):

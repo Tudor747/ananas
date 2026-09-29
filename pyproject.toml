@@ -15,12 +15,22 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8,<9"]
+docs = [
+    "python-docx>=1.2,<2",
+    "python-pptx>=1,<2",
+]
 
 [project.scripts]
 pi-ot-probe = "pi_ot_probe.main:main"
+pi-ot-local-check = "pi_ot_probe.diagnostics.local_check:main"
 
 [tool.setuptools.packages.find]
+where = ["src"]
 include = ["pi_ot_probe*"]
 
+[tool.setuptools.package-data]
+pi_ot_probe = ["web/static/*.html", "web/static/css/*.css", "web/static/js/*.js", "web/static/js/views/*.js"]
+
 [tool.pytest.ini_options]
-testpaths = ["tests", "kali_demo/tests"]
+testpaths = ["tests"]
+pythonpath = ["src"]

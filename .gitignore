@@ -9,3 +9,4 @@ __pycache__/
 dist/
 build/
 kali_demo/data/local-check.json
+data/
