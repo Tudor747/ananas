@@ -19,6 +19,7 @@ from pi_ot_probe.application.baselines import BaselineManager
 from pi_ot_probe.collectors.wifi import discover_wifi
 from pi_ot_probe.collectors.http import inspect_website
 from pi_ot_probe.application.dashboard import build_dashboard_state
+from pi_ot_probe.application.instruments import InstrumentWorkspace
 
 
 class ProbeService:
@@ -27,6 +28,7 @@ class ProbeService:
     def __init__(self, database_path: Path | str) -> None:
         self.repository = Repository(database_path)
         self.baselines = BaselineManager(self.repository)
+        self.instruments = InstrumentWorkspace(self.repository)
         # Serialize operations so their progress and cancellation cannot overlap.
         self._scan_lock = asyncio.Lock()
         self._active_token: CancellationToken | None = None
@@ -245,3 +247,12 @@ class ProbeService:
 
     def state(self) -> dict[str, object]:
         return build_dashboard_state(self.repository, self.baselines, self._operation)
+
+    def assessment(self) -> dict[str, Any]:
+        return self.instruments.assessment(self.state())
+
+    def require_current_site(self, expected: str) -> dict[str, Any]:
+        state = self.state()
+        if not expected or state.get("current_site") != expected:
+            raise ValueError("the current network changed or has not been discovered; refresh before saving")
+        return state

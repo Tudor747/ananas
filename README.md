@@ -1,8 +1,20 @@
-# Pi-OT Security Probe
+# Pi + ESP Assessment Workstation
 
-A local website for real network inventory, bounded service checks, HTTP/TLS
-observations, Wi-Fi inventory, baselines, and change review. It displays raw
-evidence without inferred vulnerability scores. No Raspberry Pi is required.
+A local website for business network inventory, bounded service checks,
+HTTP/TLS observations, Wi-Fi inventory, baselines, and evidence-backed assessment
+review. It adds an operator-controlled companion workspace for existing
+BWifiKill ESP instruments without changing their firmware. It runs on an
+ordinary computer; Raspberry Pi 5 is the planned portable host.
+
+**Findings & Improvements** links observed exposure to specific follow-up actions
+and exports a bullet-point Markdown report or evidence JSON. Priorities are
+review suggestions, not vulnerability scores. **ESP Toolkit** registers unknown
+hardware and preserves manual observations with source, time and location.
+The unchanged firmware does not expose a verified scan telemetry/control API;
+registration does not establish a physical connection.
+
+See [the practical workflow](docs/practical-assessment.md) for the current
+capabilities, limits, and next technical steps.
 
 ## Start on Windows
 

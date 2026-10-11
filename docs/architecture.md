@@ -74,6 +74,21 @@ browser security headers. The separate `management_api/` requires a bearer
 token; it is not the website backend. Remote authenticated website management
 is future work.
 
+## Assessment and unchanged ESP instruments
+
+`application/assessment.py` derives review leads and coverage limitations from
+current evidence. It does not activate the legacy risk engine or claim CVEs.
+`application/instruments.py` stores operator-defined instruments, manual field
+observations and review decisions. Findings refer to exact evidence revisions;
+new observations need new reviews. New tables are additive.
+
+`web/routes/assessment.py` exposes these local workflows. Field observations
+and reviews are scoped to the current network, with a submitted site guard to
+reject stale forms. `reports/assessment.py` exports Markdown and JSON with
+evidence, recommendations and unassessed areas. ESP registration is bookkeeping,
+not a physical connection or remote-control interface. No BWifiKill firmware
+files are changed. See `practical-assessment.md` for the implemented workflow.
+
 ## Packaging and compatibility
 
 `pyproject.toml` discovers packages under `src` and includes HTML, CSS, and

@@ -14,6 +14,7 @@ from urllib.request import Request, urlopen
 import uvicorn
 
 from pi_ot_probe.web.app import create_app
+from pi_ot_probe.domain.models import Scan, ScanLevel, ScanProfile, ScanStatus, utc_now
 
 
 class WebsiteHttpTests(unittest.TestCase):
@@ -57,6 +58,57 @@ class WebsiteHttpTests(unittest.TestCase):
                 self.assertEqual(json.loads(get("/api/state"))["assets"], [])
                 self.assertIn("assets", json.loads(get("/api/reports/site.json")))
                 self.assertIn("ip,mac,hostname", get("/api/reports/assets.csv"))
+                self.assertEqual(json.loads(get("/api/assessment"))["findings"], [])
+                self.assertIn("Assessment coverage", get("/api/reports/assessment.md"))
+                self.assertIn("coverage", json.loads(get("/api/reports/assessment.json")))
+
+                def post(path, payload):
+                    request = Request(base + path, method="POST", data=json.dumps(payload).encode(),
+                                      headers={"Content-Type": "application/json"})
+                    return urlopen(request, timeout=5)
+
+                with post("/api/instruments", {"name": "ESP A"}) as response:
+                    self.assertEqual(response.status, 201)
+                    instrument = json.loads(response.read())
+                    self.assertEqual(instrument["connection_status"], "not verified")
+                self.assertEqual(len(json.loads(get("/api/instruments"))["instruments"]), 1)
+                with self.assertRaises(HTTPError) as stale:
+                    post("/api/field-observations", {
+                        "site": "not-current", "instrument_id": instrument["id"], "category": "wifi",
+                        "title": "Test", "subject": "AP", "evidence": "Recorded locally",
+                    })
+                self.assertEqual(stale.exception.code, 400)
+                stale.exception.close()
+                with self.assertRaises(HTTPError) as invalid:
+                    post("/api/instruments", {"name": "   "})
+                self.assertEqual(invalid.exception.code, 400)
+                invalid.exception.close()
+                # Seed a completed discovery fixture, never a network scan, then
+                # exercise the whole manual evidence -> review -> report workflow.
+                repository = server.config.app.state.probe_service.repository
+                site_id = repository.ensure_site("Office", utc_now())
+                repository.create_scan(Scan(
+                    site="Office", level=ScanLevel.DISCOVERY, profile=ScanProfile.OFFICE,
+                    target="simulation://http-test", simulation=True,
+                    status=ScanStatus.COMPLETED, started_at=utc_now(), finished_at=utc_now(),
+                ), site_id)
+                with post("/api/field-observations", {
+                    "site": "Office", "instrument_id": instrument["id"], "category": "detection_validation",
+                    "title": "Alert validation", "subject": "Lab sensor",
+                    "evidence": "Expected test alert was recorded by the operator.",
+                    "recommendation": "Retain the alert timestamp and verify response time.",
+                }) as response:
+                    self.assertEqual(response.status, 201)
+                finding = json.loads(get("/api/assessment"))["findings"][0]
+                self.assertEqual(finding["basis"], "manual observation")
+                with post(f"/api/assessment/{finding['id']}/review", {
+                    "site": "Office", "status": "reviewed", "note": "Evidence inspected",
+                }) as response:
+                    self.assertTrue(json.loads(response.read())["saved"])
+                exported = json.loads(get("/api/reports/assessment.json"))["findings"][0]
+                self.assertEqual(exported["status"], "reviewed")
+                self.assertEqual(exported["note"], "Evidence inspected")
+                self.assertIn("Alert validation", get("/api/reports/assessment.md"))
                 request = Request(base + "/api/real/run", method="POST",
                                   data=json.dumps({"target": "192.168.1.0/24", "authorized": False}).encode(),
                                   headers={"Content-Type": "application/json"})

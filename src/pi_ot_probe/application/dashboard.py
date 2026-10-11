@@ -61,9 +61,9 @@ def _latest_verification(
     asset_id: int,
     site_id: int,
     discovery_rowid: int,
-) -> tuple[dict[str, Any], str | None]:
+) -> tuple[dict[str, Any], str | None, str | None]:
     row = connection.execute(
-        """SELECT sa.snapshot_json, sa.observed_at
+        """SELECT sa.snapshot_json, sa.observed_at, sc.id AS scan_id
         FROM scan_assets sa
         JOIN scans sc ON sc.id=sa.scan_id
         WHERE sa.asset_id=? AND sc.site_id=? AND sc.level=2
@@ -72,8 +72,8 @@ def _latest_verification(
         (asset_id, site_id, discovery_rowid),
     ).fetchone()
     if not row:
-        return {}, None
-    return _json_value(row["snapshot_json"], {}), row["observed_at"]
+        return {}, None, None
+    return _json_value(row["snapshot_json"], {}), row["observed_at"], row["scan_id"]
 
 
 def _assets(
@@ -105,7 +105,7 @@ def _assets(
             "hostnames", _json_value(asset.pop("hostnames_json"), [])
         )
 
-        verified, verified_at = _latest_verification(
+        verified, verified_at, verification_scan_id = _latest_verification(
             connection,
             int(asset["id"]),
             int(discovery["site_id"]),
@@ -121,6 +121,8 @@ def _assets(
             for port in sorted(set(verified.get("ports", [])))
         ]
         asset["services"] = verified.get("services", [])
+        asset["services_checked_at"] = verified_at
+        asset["verification_scan_id"] = verification_scan_id
         for service in asset["services"]:
             service["observed_at"] = verified_at
         asset["protocols"] = verified.get("protocols", [])

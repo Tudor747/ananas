@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Pi-OT Probe // Analyst Workspace</title>
+  <title>Pi + ESP // Assessment Workstation</title>
   <link rel="stylesheet" href="/static/css/styles.css">
 </head>
 <body>
@@ -11,15 +11,17 @@
     <div class="brand">
       <div class="brand-mark" aria-hidden="true">P</div>
       <div>
-        <p class="eyebrow">PI-OT SECURITY PROBE</p>
-        <h1>Analyst workspace</h1>
+        <p class="eyebrow">PI + ESP / BWifiKill COMPANION</p>
+        <h1>Assessment workstation</h1>
       </div>
     </div>
     <div class="safe-badge"><span></span> LOCAL / BOUNDED TRAFFIC</div>
   </header>
 
   <nav class="workspace-tabs" role="tablist" aria-label="Analysis workspaces">
-    <button class="tab-button active" type="button" role="tab" aria-selected="true" data-tab="overview">Overview</button>
+    <button class="tab-button active" type="button" role="tab" aria-selected="true" data-tab="assessment">Findings &amp; Improvements</button>
+    <button class="tab-button" type="button" role="tab" aria-selected="false" data-tab="instruments">ESP Toolkit</button>
+    <button class="tab-button" type="button" role="tab" aria-selected="false" data-tab="overview">Overview</button>
     <button class="tab-button" type="button" role="tab" aria-selected="false" data-tab="change-review">Change Review <span id="change-tab-count" class="tab-count">0</span></button>
     <button class="tab-button validation-tab" type="button" role="tab" aria-selected="false" data-tab="validation">Validation Lab</button>
     <button class="tab-button" type="button" role="tab" aria-selected="false" data-tab="evidence">Assets &amp; Evidence</button>
@@ -41,7 +43,107 @@
     </section>
     <div id="status" class="status" role="status">Detecting safe local network targets...</div>
 
-    <section id="tab-overview" class="tab-panel active" role="tabpanel">
+    <section id="tab-assessment" class="tab-panel active" role="tabpanel">
+      <div class="workspace-heading">
+        <div>
+          <p class="eyebrow">BUSINESS NETWORKS / WI-FI / SERVERS</p>
+          <h2>What is exposed. What to improve.</h2>
+          <p class="muted">Review the evidence behind each observation, decide what matters, and record the next action.</p>
+        </div>
+        <div class="action-controls">
+          <button id="assessment-refresh" class="small-button secondary-safe" type="button">Refresh findings</button>
+          <a class="button-link" href="/api/reports/assessment.md">Bullet-point report</a>
+          <a class="button-link" href="/api/reports/assessment.json">Evidence JSON</a>
+        </div>
+      </div>
+      <p id="assessment-site" class="section-help">Discover a network to start collecting evidence.</p>
+      <section class="metrics compact" aria-label="Assessment review priorities">
+        <article><span id="assessment-high">0</span><small>High priority</small></article>
+        <article><span id="assessment-medium">0</span><small>Medium priority</small></article>
+        <article><span id="assessment-low">0</span><small>Low priority</small></article>
+        <article><span id="assessment-manual">0</span><small>Manual observations</small></article>
+      </section>
+      <div class="review-layout">
+        <section class="panel">
+          <div class="section-heading">
+            <h2>Evidence-backed review</h2>
+            <select id="assessment-filter" aria-label="Filter assessment findings">
+              <option value="all">All observations</option>
+              <option value="open">Needs investigation</option>
+              <option value="manual">Manual / ESP evidence</option>
+            </select>
+          </div>
+          <div id="assessment-findings" class="stack"></div>
+        </section>
+        <aside class="panel">
+          <p class="eyebrow">COVERAGE</p>
+          <h2>What has been checked</h2>
+          <div id="assessment-coverage" class="stack"></div>
+          <p id="assessment-limitations" class="callout"></p>
+        </aside>
+      </div>
+    </section>
+
+    <section id="tab-instruments" class="tab-panel" role="tabpanel" hidden>
+      <div class="workspace-heading">
+        <div>
+          <p class="eyebrow">FIELD INSTRUMENTS</p>
+          <h2>Your ESP toolkit, alongside Pi collection</h2>
+          <p class="muted">Use the existing BWifiKill menus on your ESP, then record observations here. Exact boards, radios and firmware versions can remain unverified.</p>
+        </div>
+        <span class="status-chip">OPERATOR CONTROLLED</span>
+      </div>
+      <div id="instrument-list" class="instrument-grid wide-block"></div>
+      <div class="grid">
+        <section class="panel">
+          <p class="eyebrow">ADD YOUR HARDWARE</p>
+          <h2>Register an instrument</h2>
+          <p class="section-help">Registration records your kit; it does not detect a USB connection or enable remote control.</p>
+          <form id="instrument-form" class="field-form">
+            <label for="instrument-name">Name</label>
+            <input id="instrument-name" name="name" maxlength="80" placeholder="ESP32 A" required>
+            <label for="instrument-model">Board / model</label>
+            <input id="instrument-model" name="model" maxlength="120" value="ESP32; exact board unverified" required>
+            <label for="instrument-firmware">Firmware</label>
+            <input id="instrument-firmware" name="firmware" maxlength="120" value="BWifiKill; version unverified" required>
+            <label for="instrument-notes">Hardware notes</label>
+            <textarea id="instrument-notes" name="notes" maxlength="2000" rows="3" placeholder="PCB, antennas, radio modules, or other details you know"></textarea>
+            <button type="submit">Register instrument</button>
+          </form>
+        </section>
+        <section class="panel">
+          <p class="eyebrow">KEEP THE EVIDENCE</p>
+          <h2>Record a field observation</h2>
+          <p id="field-site" class="section-help">Run discovery first to associate observations with a network.</p>
+          <form id="field-form" class="field-form">
+            <label for="field-instrument">Instrument</label>
+            <select id="field-instrument" name="instrument_id" required><option value="">Register an instrument first</option></select>
+            <label for="field-category">Observation type</label>
+            <select id="field-category" name="category">
+              <option value="wifi">Wi-Fi survey</option><option value="bluetooth">Bluetooth observation</option>
+              <option value="rf">RF activity</option><option value="network">Network observation</option>
+              <option value="detection_validation">Detection validation</option><option value="other">Other</option>
+            </select>
+            <label for="field-title">Observation title</label>
+            <input id="field-title" name="title" maxlength="160" placeholder="Describe what you observed" required>
+            <label for="field-subject">Subject / device</label>
+            <input id="field-subject" name="subject" maxlength="200" placeholder="BSSID, IP address, or device label" required>
+            <label for="field-location">Location / network zone</label>
+            <input id="field-location" name="location" maxlength="200" placeholder="Office, guest network, server room...">
+            <label for="field-observed-at">Observed at (your local time; blank means now)</label>
+            <input id="field-observed-at" name="observed_at" type="datetime-local">
+            <label for="field-evidence">Evidence</label>
+            <textarea id="field-evidence" name="evidence" rows="4" maxlength="4000" placeholder="Record the displayed values and method. For a detection test, include expected and actual alerts. Do not enter passwords." required></textarea>
+            <label for="field-recommendation">Suggested improvement / next check</label>
+            <textarea id="field-recommendation" name="recommendation" rows="2" maxlength="2000"></textarea>
+            <button id="field-save" type="submit" disabled>Save observation</button>
+          </form>
+        </section>
+      </div>
+      <p class="callout">BWifiKill stays unchanged. Its current dashboard exports portal logs, not scan inventory. This workstation does not import those logs or issue ESP commands. Radio activity alone does not identify a vulnerability or prove device ownership.</p>
+    </section>
+
+    <section id="tab-overview" class="tab-panel" role="tabpanel" hidden>
       <section class="hero panel">
         <div>
           <p class="eyebrow">CURRENT RAW INVENTORY</p>

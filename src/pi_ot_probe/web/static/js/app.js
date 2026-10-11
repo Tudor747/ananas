@@ -1,6 +1,7 @@
 // Page controller: handle user actions, fetch state, and ask views to render it.
 import {getJson, postJson} from "./api.js";
 import {byId} from "./dom.js";
+import {renderAssessment, renderInstruments} from "./views/assessment.js";
 import {
   renderAssets,
   renderBaseline,
@@ -15,6 +16,8 @@ const REFRESH_INTERVAL_MS = 1000;
 let operationBusy = false;
 let operationCancellable = false;
 let lastState = null;
+let lastAssessment = null;
+let instruments = [];
 
 function setStatus(message, kind = "") {
   const status = byId("status");
@@ -49,6 +52,7 @@ function updateControls() {
   for (const button of document.querySelectorAll(".verify-button, .web-button")) {
     button.disabled = operationBusy || !isAuthorized();
   }
+  byId("field-save").disabled = operationBusy || !lastState?.current_site || !instruments.length;
 }
 
 async function refresh() {
@@ -73,7 +77,56 @@ async function refresh() {
   renderWifi(state.access_points);
   renderScans(state.scans);
   renderBaseline(state.baseline);
+  if (!operationBusy) await refreshWorkspace();
   updateControls();
+}
+
+async function refreshWorkspace() {
+  const [assessment, hardware] = await Promise.all([getJson("/api/assessment"), getJson("/api/instruments")]);
+  lastAssessment = assessment;
+  instruments = hardware.instruments;
+  renderAssessment(assessment, reviewFinding);
+  renderInstruments(instruments, lastState?.current_site, operationBusy);
+}
+
+async function reviewFinding(site, id, status, note) {
+  try {
+    await postJson(`/api/assessment/${id}/review`, {site, status, note});
+    await refreshWorkspace();
+    setStatus("Review saved for this evidence revision. New observations require a new review.");
+  } catch (error) { setStatus(error.message, "error"); }
+}
+
+async function registerInstrument(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = form.querySelector("button[type=submit]");
+  button.disabled = true;
+  try {
+    await postJson("/api/instruments", Object.fromEntries(new FormData(form)));
+    form.reset();
+    await refreshWorkspace();
+    setStatus("Instrument registered. Use its existing menus and record observations below.");
+  } catch (error) { setStatus(error.message, "error"); }
+  finally { button.disabled = false; }
+}
+
+async function recordFieldObservation(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const payload = Object.fromEntries(new FormData(form));
+  payload.site = lastState?.current_site;
+  payload.instrument_id = Number(payload.instrument_id);
+  if (payload.observed_at) payload.observed_at = new Date(payload.observed_at).toISOString();
+  else delete payload.observed_at;
+  byId("field-save").disabled = true;
+  try {
+    await postJson("/api/field-observations", payload);
+    form.reset();
+    await refreshWorkspace();
+    setStatus("Observation saved with its instrument and timestamp. Review it in Findings & Improvements.");
+  } catch (error) { setStatus(error.message, "error"); }
+  finally { updateControls(); }
 }
 
 async function withOperation(message, operation, {cancellable = true} = {}) {
@@ -211,6 +264,12 @@ async function loadScenarios() {
 }
 
 function registerEventHandlers() {
+  byId("instrument-form").addEventListener("submit", registerInstrument);
+  byId("field-form").addEventListener("submit", recordFieldObservation);
+  byId("assessment-filter").addEventListener("change", () => {
+    if (lastAssessment) renderAssessment(lastAssessment, reviewFinding);
+  });
+  byId("assessment-refresh").addEventListener("click", () => refresh().catch(error => setStatus(error.message, "error")));
   for (const button of document.querySelectorAll(".tab-button")) {
     button.addEventListener("click", () => openTab(button.dataset.tab));
   }

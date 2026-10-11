@@ -7,15 +7,15 @@ from fastapi.staticfiles import StaticFiles
 from pi_ot_probe.application.service import ProbeService
 from pi_ot_probe.config.paths import STATIC_DIR, default_database
 from pi_ot_probe.web.middleware import security_headers
-from pi_ot_probe.web.routes import baselines, inventory, reports, scans
+from pi_ot_probe.web.routes import assessment, baselines, inventory, reports, scans
 
 
 def create_app(database_path: Path | str | None = None) -> FastAPI:
     # One service per app owns scan cancellation and progress; routes share it.
     service = ProbeService(database_path if database_path is not None else default_database())
     application = FastAPI(
-        title="Pi-OT Probe Engineering Console",
-        description="Local discovery, verification, baseline, and raw evidence dashboard.",
+        title="Pi + ESP Assessment Workstation",
+        description="Local network checks, unchanged field instruments, evidence and assessment review.",
         version="0.4.0",
     )
     application.state.probe_service = service
@@ -25,7 +25,7 @@ def create_app(database_path: Path | str | None = None) -> FastAPI:
     async def dashboard() -> FileResponse:
         return FileResponse(STATIC_DIR / "index.html")
 
-    for route_group in (inventory, scans, baselines, reports):
+    for route_group in (inventory, scans, baselines, reports, assessment):
         application.include_router(route_group.build_router(service))
     application.middleware("http")(security_headers)
     return application

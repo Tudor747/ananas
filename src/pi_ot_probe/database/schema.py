@@ -186,4 +186,24 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS idx_scan_assets_asset ON scan_assets(asset_id)",
     "CREATE INDEX IF NOT EXISTS idx_web_observations_asset ON web_observations(asset_id)",
     "CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON audit_log(timestamp)",
+    """CREATE TABLE IF NOT EXISTS assessment_instruments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE, model TEXT NOT NULL, firmware TEXT NOT NULL,
+        notes TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS field_observations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        site_id INTEGER NOT NULL REFERENCES sites(id),
+        instrument_id INTEGER NOT NULL REFERENCES assessment_instruments(id),
+        category TEXT NOT NULL, title TEXT NOT NULL, subject TEXT NOT NULL,
+        location TEXT NOT NULL DEFAULT '', evidence TEXT NOT NULL,
+        recommendation TEXT NOT NULL DEFAULT '',
+        observed_at TEXT NOT NULL, recorded_at TEXT NOT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS assessment_reviews (
+        site_id INTEGER NOT NULL REFERENCES sites(id), finding_id TEXT NOT NULL,
+        status TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL,
+        PRIMARY KEY(site_id, finding_id)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_field_observations_site ON field_observations(site_id)",
 )

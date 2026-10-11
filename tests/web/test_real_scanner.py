@@ -203,6 +203,10 @@ class RealDiscoveryServiceTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(state["assets"][0]["services"][0]["name"], "telnet")
             self.assertNotIn("findings", state)
             self.assertNotIn("risk_score", state["assets"][0])
+            assessment = service.assessment()
+            self.assertEqual(assessment["findings"][0]["rule"], "tcp-23")
+            self.assertEqual(assessment["findings"][0]["evidence"]["scan_id"], result["scan_id"])
+            self.assertIn("1 of 1", assessment["coverage"][1]["detail"])
 
     async def test_new_discovery_resets_current_service_evidence(self) -> None:
         local = [LocalNetwork("eth0", "192.168.50.10", "192.168.50.0/24", "192.168.50.0/24")]

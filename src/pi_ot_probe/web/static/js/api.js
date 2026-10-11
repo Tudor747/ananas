@@ -2,7 +2,10 @@
 async function parseResponse(response) {
   const result = await response.json();
   if (!response.ok) {
-    throw new Error(result.detail || `Request failed (${response.status})`);
+    const detail = Array.isArray(result.detail)
+      ? result.detail.map(item => `${item.loc?.at(-1) || "Request"}: ${item.msg}`).join("; ")
+      : result.detail;
+    throw new Error(detail || `Request failed (${response.status})`);
   }
   return result;
 }
