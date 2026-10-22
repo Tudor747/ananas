@@ -1,5 +1,16 @@
 # Learning and changing the code
 
+SSH operation and optional ESP USB self-tests are documented in
+[SSH and USB testing](ssh-and-usb-testing.md). The new firmware addition must be flashed
+before the ESP can answer; physical deployment has not been verified here.
+
+The deployment target is now a Raspberry Pi as the only host, with one ESP,
+four physical buttons, two switches, and two 2.4 GHz antennas. Desktop commands
+below remain development conveniences. The next UI requirement is a Pi screen
+menu showing two large buttons at a time, with swipe and button scrolling;
+see [hardware and screen requirements](hardware-and-screen.md). Input wiring
+and mappings must be resolved before implementing the physical input adapter.
+
 Start with the working website. You do not need Raspberry Pi hardware, a
 frontend build tool, or knowledge of every folder to make your first change.
 

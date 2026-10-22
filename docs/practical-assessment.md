@@ -1,15 +1,19 @@
 # Practical Pi + ESP workflow
 
 This branch targets general business networks, Wi-Fi and servers. Commercial
-engagement management is deferred. The existing `BWifiKiller/` source and
-firmware are unchanged. Unknown ESP board/radio models do not block the local
-software workflow.
+engagement management is deferred. The `BWifiKiller/` source now has an optional
+USB diagnostic interface; the installed firmware needs updating to use it.
+The reference build specifies an ESP32 and two nRF24L01+ modules. USB is the confirmed ESP-to-Pi connection, but automatic telemetry is
+not implemented. The deployment scope is one Raspberry Pi host and one ESP
+with four physical buttons, two switches, and two 2.4 GHz antennas. The planned
+Pi screen has two large menu buttons at a time with swipe and button scrolling;
+see [hardware and screen requirements](hardware-and-screen.md).
 
 ## What works now
 
-1. Start `run.ps1` on Windows or `run.sh` on Linux and open
+1. On the Raspberry Pi, start `bash run.sh` and open
    `http://127.0.0.1:8088`.
-2. In **ESP Toolkit**, register each instrument you actually have. Leave the
+2. In **ESP Toolkit**, register the single ESP instrument. Leave the
    model and firmware marked unverified if needed. A record does not detect a
    USB device or establish a command connection.
 3. Select an attached private network and run discovery. Verify selected hosts
@@ -53,21 +57,22 @@ The legacy experimental risk engine remains disabled. The new assessment layer
 uses transparent review priorities and recommendations, with no overall network
 score and no CVE assertions.
 
-## Unchanged firmware integration boundary
+## ESP integration boundary
 
-The checked-in firmware has no general serial command parser or structured
-Wi-Fi/BLE/RF result stream. Its HTTP dashboard exports the captive-portal log,
+The new source accepts PING/SELFTEST diagnostic requests over serial, but has no
+general tool-control API or structured Wi-Fi/BLE/RF result stream. Its HTTP dashboard exports the captive-portal log,
 not scanner inventory. The Pi application neither imports that log nor controls
-the ESP. The installed firmware version still needs verification on hardware.
+ESP tools. The installed firmware version still needs verification on hardware.
+The separate CLI supports USB self-tests after installing the updated firmware;
+see [SSH and USB testing](ssh-and-usb-testing.md).
 
 For now:
 
-- Pi/PC: automated network observations, comparison, review and reporting.
+- Raspberry Pi: automated network observations, comparison, review and reporting.
 - ESP: operator-controlled instrument, with manual evidence recorded on the Pi.
-- Second ESP: another instrument record when available, not an assumed online
-  sensor or automatic extension of coverage.
 
-USB power/serial wiring alone will not create the missing firmware API.
+USB wiring alone does not enable the diagnostic protocol: install the updated
+firmware and run the CLI. General tool control and scan telemetry remain future work.
 
 ## Next technical increments
 

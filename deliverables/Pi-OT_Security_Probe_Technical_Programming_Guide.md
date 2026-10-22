@@ -1,5 +1,22 @@
 # Pi-OT Security Probe - Technical Programming Guide
 
+SSH operation and optional ESP USB self-tests are documented in
+[SSH and USB testing](../docs/ssh-and-usb-testing.md). The new firmware addition must be flashed
+before the ESP can answer; physical deployment has not been verified here.
+
+## Current appliance scope (2026-10-21)
+
+The Raspberry Pi is the sole deployment host, with exactly one ESP companion,
+four physical buttons, two switches, and two 2.4 GHz antennas. The planned
+interactive Pi screen shows two large primary menu buttons at a time and
+supports slide/swipe navigation plus button scrolling. Screen specifications,
+control mappings, radio wiring, and the Pi-to-ESP connection remain open; see
+[hardware and screen requirements](../docs/hardware-and-screen.md).
+
+This menu and physical input integration are requirements, not implemented
+features. Windows/Linux/Kali references below describe existing software
+compatibility and development options, not a requirement for a separate PC.
+
 ## 1. Pi-OT Security Probe
 
 Pi-OT Security Probe is a local, offline-first engineering console for collecting and reviewing bounded network evidence. The working software runs on Windows, Linux, or Kali without Raspberry Pi hardware. It is designed for an authorized operator who needs a readable inventory of devices, selected service observations, web metadata, Wi-Fi access-point information, and changes over time.

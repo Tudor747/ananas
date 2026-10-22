@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BWifiKill V4.0 | Web Flasher</title>
+  <meta name="description" content="Web flasher for BWifiKill ESP32 V4.0">
+  <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+  <style>
+    :root {
+      --glow: #00ff66;
+      --glow-soft: rgba(0, 255, 102, 0.28);
+      --bg: #000;
+      --panel: rgba(0, 12, 4, 0.9);
+      --text: #d8ffe6;
+      --muted: #89c79d;
+      --danger: #ff6666;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      min-height: 100%;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 28px 14px;
+      overflow-x: hidden;
+      background: var(--bg);
+      color: var(--glow);
+      font-family: "Courier New", Consolas, monospace;
+    }
+
+    canvas {
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      opacity: 0.42;
+    }
+
+    .shell {
+      position: relative;
+      z-index: 1;
+      width: min(560px, 100%);
+      border: 1px solid var(--glow);
+      background: var(--panel);
+      box-shadow: 0 0 32px var(--glow-soft), inset 0 0 24px rgba(0, 255, 102, 0.08);
+      padding: 28px;
+      text-align: center;
+    }
+
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+
+    .terminal-tag {
+      display: inline-block;
+      background: var(--glow);
+      color: #001306;
+      padding: 4px 10px;
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 8px 0 8px;
+      font-size: clamp(38px, 9vw, 62px);
+      line-height: 0.95;
+      letter-spacing: 5px;
+      color: var(--glow);
+      text-shadow: 0 0 12px var(--glow);
+    }
+
+    .version {
+      color: #fff;
+      font-size: 14px;
+      letter-spacing: 0.25em;
+      opacity: 0.8;
+      margin-bottom: 22px;
+    }
+
+    .copy {
+      color: var(--text);
+      font-size: 15px;
+      line-height: 1.55;
+      margin: 0 auto 22px;
+      max-width: 460px;
+    }
+
+    .warning {
+      border: 1px dashed var(--glow);
+      color: var(--text);
+      background: rgba(0, 255, 102, 0.045);
+      padding: 14px;
+      margin: 22px 0;
+      text-align: left;
+      line-height: 1.55;
+      font-size: 14px;
+    }
+
+    .warning b {
+      color: #fff;
+    }
+
+    esp-web-install-button {
+      display: block;
+      width: 100%;
+      margin-top: 18px;
+    }
+
+    button[slot="activate"] {
+      width: 100%;
+      border: none;
+      background: var(--glow);
+      color: #001306;
+      padding: 18px 16px;
+      font-family: inherit;
+      font-size: 18px;
+      font-weight: 900;
+      cursor: pointer;
+      letter-spacing: 0.08em;
+      transition: 0.2s ease;
+      box-shadow: 0 0 20px rgba(0, 255, 102, 0.24);
+    }
+
+    button[slot="activate"]:hover {
+      background: #fff;
+      box-shadow: 0 0 34px var(--glow);
+    }
+
+    .meta {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      margin: 18px 0;
+    }
+
+    .meta span {
+      border: 1px solid rgba(0, 255, 102, 0.45);
+      color: var(--muted);
+      padding: 8px 6px;
+      font-size: 12px;
+    }
+
+    .repo-button {
+      display: block;
+      width: 100%;
+      margin-top: 18px;
+      border: 1px solid var(--glow);
+      color: var(--glow);
+      text-decoration: none;
+      padding: 14px 12px;
+      font-weight: 900;
+      letter-spacing: 0.08em;
+      transition: 0.2s ease;
+    }
+
+    .repo-button:hover {
+      background: var(--glow);
+      color: #001306;
+      box-shadow: 0 0 24px var(--glow-soft);
+    }
+
+    .social {
+      display: flex;
+      justify-content: center;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 20px;
+      font-size: 13px;
+    }
+
+    .social a {
+      color: var(--glow);
+      text-decoration: none;
+    }
+
+    .social a:hover {
+      color: #fff;
+      text-decoration: underline;
+    }
+
+    footer {
+      margin-top: 18px;
+      color: rgba(255, 255, 255, 0.62);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    @media (max-width: 560px) {
+      body {
+        align-items: flex-start;
+      }
+
+      .shell {
+        padding: 22px;
+      }
+
+      .topbar {
+        align-items: flex-start;
+      }
+
+      h1 {
+        letter-spacing: 2px;
+      }
+
+      .meta {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="matrix"></canvas>
+
+  <main class="shell">
+    <div class="topbar">
+      <span class="terminal-tag">TERMINAL V4.0</span>
+    </div>
+
+    <h1>BWIFIKILL</h1>
+    <div class="version">ESP32 / NRF24 / OLED</div>
+
+    <p class="copy">Install BWifiKill ESP32 V4.0 directly from your browser. Use Chrome or Edge, connect your ESP32 through USB and select the serial port.</p>
+
+    <div class="meta" aria-label="Firmware details">
+      <span>VERSION 4.0</span>
+      <span>ESP32 CHIP</span>
+      <span>FULL BIN</span>
+    </div>
+
+    <div class="warning">
+      <span>[!] CONNECT THE ESP32 VIA USB</span><br>
+      <span>[!] CLOSE VS CODE / SERIAL MONITOR</span><br>
+      <span>[!] IF IT FAILS: HOLD <b>BOOT</b></span>
+    </div>
+
+    <esp-web-install-button manifest="manifest.json">
+      <button slot="activate">INSTALL BWifiKill V4.0</button>
+    </esp-web-install-button>
+
+    <a class="repo-button" href="https://github.com/pepeangell5/BWifiKill-ESP32-V4.0" target="_blank" rel="noreferrer">BACK TO REPOSITORY</a>
+
+    <div class="social">
+      <a href="https://www.instagram.com/pepeangelll" target="_blank" rel="noreferrer">Instagram</a>
+      <a href="https://github.com/pepeangell5" target="_blank" rel="noreferrer">GitHub</a>
+      <a href="https://www.facebook.com/esp32tools" target="_blank" rel="noreferrer">Facebook</a>
+    </div>
+
+    <footer>Educational project for lab use and authorized auditing.</footer>
+  </main>
+
+  <script>
+    const canvas = document.getElementById("matrix");
+    const ctx = canvas.getContext("2d");
+    const chars = "0123456789ABCDEF";
+    const fontSize = 16;
+    let drops = [];
+
+    function resizeMatrix() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+      const columns = Math.floor(canvas.width / fontSize);
+      drops = Array(columns).fill(1);
+    }
+
+    function drawMatrix() {
+      ctx.fillStyle = "rgba(0, 0, 0, 0.05)";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = "#00ff66";
+      ctx.font = fontSize + "px monospace";
+
+      for (let i = 0; i < drops.length; i++) {
+        const text = chars.charAt(Math.floor(Math.random() * chars.length));
+        ctx.fillText(text, i * fontSize, drops[i] * fontSize);
+        if (drops[i] * fontSize > canvas.height && Math.random() > 0.975) {
+          drops[i] = 0;
+        }
+        drops[i]++;
+      }
+    }
+
+    resizeMatrix();
+    setInterval(drawMatrix, 40);
+    window.addEventListener("resize", resizeMatrix);
+  </script>
+</body>
+</html>

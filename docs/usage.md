@@ -1,5 +1,22 @@
 # Run and use the local website
 
+SSH operation and optional ESP USB self-tests are documented in
+[SSH and USB testing](ssh-and-usb-testing.md). The new firmware addition must be flashed
+before the ESP can answer; physical deployment has not been verified here.
+
+## Raspberry Pi appliance target
+
+Normal operation will use the Raspberry Pi as the only host, plus one ESP with
+four physical buttons, two switches, and two 2.4 GHz antennas. On the Pi, use
+the Linux setup below and open `http://127.0.0.1:8088` in its local browser.
+The selected Pi OS and hardware still need verification. The planned full-screen
+menu has two large primary buttons visible at a time, with swipe and button
+scrolling; it is not implemented yet. See
+[hardware and screen requirements](hardware-and-screen.md).
+
+Windows and Kali instructions are retained for development and compatibility;
+neither a separate PC nor a second ESP is required by the appliance design.
+
 ## Windows
 
 Install Python 3.11 or newer and [Nmap](https://nmap.org/download).
@@ -25,7 +42,14 @@ bash run.sh
 ```
 
 Run the launcher from the repository root. To select a different port:
-`PI_OT_DEMO_PORT=8090 bash run.sh`.
+`bash run.sh --port 8090` (or `PI_OT_DEMO_PORT=8090 bash run.sh`).
+
+`bash kali_demo/run.sh` starts the same application. Use `--setup` to install
+without starting the server, `--check` to run local diagnostics, and
+`--no-install` to reuse dependencies after setup without contacting the package
+index. If the checkout contains a Windows `.venv/`, the Bash launcher creates
+`.venv-linux/` for Linux. See [the Kali guide](../kali_demo/README.md) for checks
+and troubleshooting.
 
 ## Working with real observations
 

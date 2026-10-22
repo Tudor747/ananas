@@ -1,5 +1,13 @@
 # Architecture
 
+The appliance target is one Raspberry Pi host and one ESP with four physical
+buttons, two switches, and two 2.4 GHz antennas. The planned Pi screen presents
+two large menu buttons at a time, with swipe and button scrolling. See
+[hardware and screen requirements](hardware-and-screen.md) for input decisions.
+The flow below describes the existing website; the new menu and hardware input
+adapter are not implemented. Both touch and physical navigation should feed the
+same menu state, with an input adapter chosen after wiring and transport are known.
+
 All Python code lives in `src/pi_ot_probe`. The website is assembled in
 `web/app.py`; `application/service.py` coordinates its work without importing
 FastAPI. This allows the same behavior to be tested without a browser.
@@ -74,7 +82,7 @@ browser security headers. The separate `management_api/` requires a bearer
 token; it is not the website backend. Remote authenticated website management
 is future work.
 
-## Assessment and unchanged ESP instruments
+## Assessment and ESP instruments
 
 `application/assessment.py` derives review leads and coverage limitations from
 current evidence. It does not activate the legacy risk engine or claim CVEs.
@@ -86,8 +94,14 @@ new observations need new reviews. New tables are additive.
 and reviews are scoped to the current network, with a submitted site guard to
 reject stale forms. `reports/assessment.py` exports Markdown and JSON with
 evidence, recommendations and unassessed areas. ESP registration is bookkeeping,
-not a physical connection or remote-control interface. No BWifiKill firmware
-files are changed. See `practical-assessment.md` for the implemented workflow.
+not a physical connection or remote-control interface. See
+`practical-assessment.md` for the implemented workflow.
+
+Separately, `diagnostics/esp_check.py` talks to the optional diagnostic firmware
+in `BWifiKiller/src/usb_diagnostics.cpp`. It uses explicit serial-port selection,
+request IDs and bounded waits for PING/SELFTEST. The ESP reads radio SPI response
+and button pin levels without launching tools. Results are CLI JSON, not website
+inventory or scanner telemetry. See [SSH and USB testing](ssh-and-usb-testing.md).
 
 ## Packaging and compatibility
 

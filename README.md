@@ -3,15 +3,32 @@
 A local website for business network inventory, bounded service checks,
 HTTP/TLS observations, Wi-Fi inventory, baselines, and evidence-backed assessment
 review. It adds an operator-controlled companion workspace for existing
-BWifiKill ESP instruments without changing their firmware. It runs on an
-ordinary computer; Raspberry Pi 5 is the planned portable host.
+BWifiKill ESP hardware. An optional firmware addition supports USB self-tests.
+The deployment target is
+one Raspberry Pi as the sole application host and exactly one ESP with four
+physical buttons, two switches, and two 2.4 GHz antennas.
+
+The ESP connects to the Pi via USB. The planned Pi screen menu shows two large
+options per page, with vertical swipe paging and button scrolling. The supplied
+screen identifier is `HSD28309 EI`, with touch already working; menu order is
+unrestricted. The second physical switch is on/off.
+See [hardware and screen requirements](docs/hardware-and-screen.md)
+for confirmed scope and open input details. This menu is not implemented yet.
+Desktop launchers remain available for development and compatibility.
+
+`BWifiKiller/` is included as a regular folder in this repository, with its
+original license and documentation. A normal `git clone` includes the firmware
+source and USB diagnostics; no submodule commands are needed. Generated
+PlatformIO build files are excluded.
 
 **Findings & Improvements** links observed exposure to specific follow-up actions
 and exports a bullet-point Markdown report or evidence JSON. Priorities are
 review suggestions, not vulnerability scores. **ESP Toolkit** registers unknown
 hardware and preserves manual observations with source, time and location.
-The unchanged firmware does not expose a verified scan telemetry/control API;
-registration does not establish a physical connection.
+Instrument registration does not establish a physical connection. The new USB
+diagnostic client checks round trips, radio SPI responses, and button pin levels
+after the updated ESP firmware is installed. Scan telemetry is not implemented.
+See [SSH and USB testing](docs/ssh-and-usb-testing.md) for setup and commands.
 
 See [the practical workflow](docs/practical-assessment.md) for the current
 capabilities, limits, and next technical steps.
@@ -31,6 +48,8 @@ Python dependencies. Keep PowerShell open; press Ctrl+C to stop. To use another
 port, run `.\run.ps1 -Port 8090`. Nmap is needed for scans, not to open the UI.
 
 On Linux, install Python, venv support, and Nmap, then run `bash run.sh`.
+The `kali_demo` launcher starts the same current app; see the
+[Kali setup and checks](kali_demo/README.md). Use `bash run.sh --help` for options.
 See [usage](docs/usage.md) for detailed setup and collector limits.
 
 ## Find your way around

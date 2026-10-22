@@ -1,9 +1,14 @@
 # Industrial assessment workstation: proposed build specification
 
-Status: long-term design proposal, 2026-10-10. The selected first scope is now
+Status: long-term design proposal, updated 2026-10-22. Hardware and UI scope is
+defined by [hardware and screen requirements](hardware-and-screen.md).
+The selected first scope is now
 general business networks, Wi-Fi and servers, focused on practical tooling.
 Commercial engagement management is deferred at the user's request. Exact ESP
-and radio models remain unknown; work proceeds with manual instrument records.
+hardware details still need physical verification. The BWifiKiller reference
+specifies ESP32 DevKit/WROOM with two nRF24L01+ modules; USB to the Pi is confirmed.
+Assessment observations remain manual. A separate PING/SELFTEST USB diagnostic
+protocol is now implemented in source; see [SSH testing](ssh-and-usb-testing.md).
 
 The first implementation adds findings and improvements, coverage reporting,
 manual ESP observations, review decisions and Markdown/JSON reports. See
@@ -17,12 +22,18 @@ cybersecurity service. The operator should be able to explain each client's
 exposures, supported security findings, recommended improvements, and retest
 results using traceable evidence.
 
-- Raspberry Pi 5 is the planned application host.
-- Two ESP devices are planned; exact boards and attached radios are unconfirmed.
-- Three antennas or fewer is a design preference; whether this means external
-  antennas or all antennas remains unconfirmed.
-- Preserve all files under `BWifiKiller/` and the firmware already installed on
-  the user's ESP. No reflash is required by this proposal.
+- Raspberry Pi is the sole application host; Pi 5 was the earlier planned model.
+- Exactly one ESP with four physical buttons and two switches.
+- Exactly two 2.4 GHz antennas; the reference uses two nRF24L01+ modules.
+- ESP-to-Pi connection is USB; diagnostic PING/SELFTEST is implemented in source.
+  General tool control and scan telemetry remain unimplemented.
+- Interactive Pi screen menu with two large primary buttons visible at a time,
+  vertical slide/swipe paging and button scrolling, two options per page.
+  Menu order is unrestricted; screen identifier supplied: `HSD28309 EI`, with
+  touch already working. The second physical switch is confirmed as on/off.
+- Preserve existing physical controls. The user has now requested USB self-tests,
+  which require the optional diagnostic firmware addition and a one-time reflash.
+  Manual assessment workflows still work without a firmware update.
 - Reuse the working Python application and its collection and evidence layers.
 - Do not assume the installed firmware matches the checked-in source: the
   firmware README distinguishes original binaries from translated local source.
@@ -31,12 +42,11 @@ results using traceable evidence.
 
 | Interface | Observed implementation | Integration consequence |
 | --- | --- | --- |
-| USB serial | `Serial.begin(115200)` and limited diagnostics; no general command parser or scan-result stream found | USB does not currently provide remote scan control or structured inventory |
+| USB serial | 115200 baud; new source accepts PING/SELFTEST | Supports diagnostic round trips, SPI checks and GPIO readings after firmware update; no remote scan control or structured inventory |
 | Dashboard HTTP | `/`, `/get-logs`, `/download-logs`, `/clear-logs` in `include/web_server.h` | This is a log viewer, not a general sensor API |
 | Exported log | `/logins.txt`, populated by `src/evil_portal.cpp` with submitted identifiers/passwords and network labels | Do not treat this as Wi-Fi/BLE inventory; do not automatically import it into client reports |
 | ESP-NOW slave control | A boolean state message, fixed peer settings, and broadcast sends | Not a general two-device telemetry or Pi control protocol |
 | Tool lifecycle | One current application selected by the menu host | Do not promise concurrent dashboard, BLE, Wi-Fi, and RF operation |
-| Dashboard addressing | The same AP configuration for each unchanged unit | Simultaneous access to two identical dashboard networks needs separate routing/interfaces or sequential sessions |
 | RF heatmap/advisor/scope | Channel sampling using `testCarrier()` | Treat outputs as relative activity indicators, not calibrated spectrum measurements or protocol identification |
 
 The initial ESP integration is therefore a device registry plus operator-led
@@ -48,15 +58,15 @@ sensor data and would depend on hidden menu state.
 ## Proposed division of responsibilities
 
 ```text
-Operator browser
+Operator menu on the Raspberry Pi screen
     -> Pi application
        -> clients, engagements, approved scope, and asset ownership
        -> Pi collectors and imported tool results
        -> evidence store and reviewed findings
        -> executive report, technical appendix, remediation, retesting
 
-ESP unit A and ESP unit B, firmware unchanged
-    -> operator selects a tool on each device
+One ESP unit, optional USB diagnostic firmware
+    -> operator selects a tool on the device
     -> operator records observation, location, time, device, and attachment
     -> Pi evidence store, explicitly labelled as operator supplied
 ```
@@ -96,7 +106,7 @@ ownership or that the access point is unauthorized.
 | Capability | First implementation | Evidence requirement / limit |
 | --- | --- | --- |
 | Engagement management | Clients, sites, scope, exclusions, dates, test modes | Existing global current-site behavior must be replaced by explicit engagement selection |
-| Hardware registry | Two named ESP records with model, firmware, connection and tested capabilities | Record unknown capabilities as unknown; no invented connection status |
+| Hardware registry | One ESP device with model, firmware, connection and tested capabilities | Record unknown capabilities as unknown; no invented connection status |
 | Inventory | Reuse host discovery and service evidence | Persist interface, zone and collector identity with every observation |
 | Exposure review | Service exposure and configuration findings | An open port is exposure; software vulnerability requires additional evidence |
 | Wireless review | Approved AP list, observed security mode, manual survey evidence | Unknown APs are candidates for investigation, not automatically rogue APs |
@@ -183,7 +193,8 @@ operated ESP; UI restrictions must not claim otherwise.
 
 Acceptance: two sample engagements cannot read or export each other's evidence;
 an ESP observation is clearly manual; every published finding has evidence and
-remediation; reports include coverage limitations; `BWifiKiller/` is unchanged.
+remediation; reports include coverage limitations; physical ESP controls retain
+their mappings and USB diagnostics do not activate ESP tools.
 
 ### Milestone 2: stronger technical assessments
 
@@ -220,7 +231,8 @@ not presented as proof of absence; device checks are verified in a lab first.
 
 ## Decisions still needed
 
-1. Exact ESP boards, nRF modules, installed firmware, wiring and antenna meaning.
+1. Exact Pi, screen, ESP and radio models, firmware, wiring and antenna connections;
+   see the [remaining hardware checks](hardware-and-screen.md#remaining-hardware-checks).
 2. Confirmed first technical scope: general business networks, Wi-Fi and servers.
 3. Service packaging is deferred; focus on practical capabilities.
 4. Whether manual ESP operation is acceptable while preserving firmware.
