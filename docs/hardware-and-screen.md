@@ -1,4 +1,11 @@
-# Raspberry Pi appliance: hardware and screen requirements
+# Three-node integration update
+
+The revised permanent inventory and new Pi control console supersede the earlier
+single-ESP requirements below. See [RF Sentinel integration](sentinel-integration.md)
+for firmware profiles, two-option touch pages, USB event transport and manual tests.
+Legacy PING/SELFTEST and manual instrument registration remain separate interfaces.
+
+# Earlier Raspberry Pi appliance requirements (historical)
 
 Updated 2026-10-22. This is the current build scope and supersedes older
 multi-ESP and antenna-count proposals. These are requirements, not a claim that

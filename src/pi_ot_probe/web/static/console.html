@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>RF Sentinel X · Control</title><link rel="stylesheet" href="/static/css/console.css"></head>
+<body>
+<header><div><small>FIIRBots · Raspberry Pi 5</small><h1>RF Sentinel X</h1></div><a href="/">Network assessment ↗</a></header>
+<main>
+<div id="nodes" class="nodes" aria-label="USB node status"></div>
+<div class="layout">
+<section aria-label="Module menu"><div class="section-heading"><h2>Choose a module</h2><span id="page-label"></span></div>
+<div id="menu" class="menu"></div>
+<nav><button id="previous">↑ Previous</button><button id="next">Next ↓</button></nav>
+<p class="muted">Swipe vertically to change pages. Operations run on the selected ESP.</p></section>
+<section class="controls"><h2 id="selection">Select a module</h2>
+<p id="description">Two nRF radios on A · 433 MHz and RFID on B · infrared on C.</p>
+<label>Operator<input id="operator" maxlength="80" autocomplete="name"></label>
+<label>Test purpose<input id="purpose" maxlength="200" placeholder="Known lab stimulus / experiment"></label>
+<label>Observation duration<select id="duration"><option value="1000">1 second</option><option value="5000" selected>5 seconds</option><option value="10000">10 seconds</option></select></label>
+<label class="consent"><input type="checkbox" id="authorized"> I have permission to run this test.</label>
+<button id="observe" disabled>Observe</button>
+<button id="nrf-test" hidden>Send one nRF peer-test packet</button>
+<details id="ir-transmit" hidden><summary>Single NEC infrared test</summary><label>32-bit code (hex)<input id="ir-code" placeholder="00FF30CF" maxlength="8"></label><button id="transmit">Send one IR frame</button></details>
+<button id="stop" class="stop">Stop all connected nodes</button>
+<p id="status" role="status" aria-live="polite">Connecting to the local application…</p>
+</section></div>
+<section class="evidence"><div class="section-heading"><h2>Evidence timeline</h2><div><a href="/api/reports/peripherals.json">JSON</a> · <a href="/api/reports/peripherals.md">Markdown</a></div></div>
+<p class="muted">USB device reports, host receive time in UTC. Manual notes remain in Network assessment. Exports contain the first 1,000 records; use the paginated API for larger captures.</p>
+<ol id="events"></ol></section>
+</main><script type="module" src="/static/js/console.js"></script>
+</body></html>

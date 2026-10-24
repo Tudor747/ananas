@@ -1,37 +1,47 @@
-# Pi + ESP Assessment Workstation
+# RF Sentinel X · Pi + three ESP32 nodes
 
-A local website for business network inventory, bounded service checks,
-HTTP/TLS observations, Wi-Fi inventory, baselines, and evidence-backed assessment
-review. It adds an operator-controlled companion workspace for existing
-BWifiKill ESP hardware. An optional firmware addition supports USB self-tests.
-The deployment target is
-one Raspberry Pi as the sole application host and exactly one ESP with four
-physical buttons, two switches, and two 2.4 GHz antennas.
+The Raspberry Pi 5 now has a local peripheral console at
+**http://127.0.0.1:8088/console**, alongside the network assessment website at `/`.
+It routes bounded USB commands to three independently identified ESP32 nodes,
+records replies/events in SQLite, and exports source-labelled evidence.
 
-The ESP connects to the Pi via USB. The planned Pi screen menu shows two large
-options per page, with vertical swipe paging and button scrolling. The supplied
-screen identifier is `HSD28309 EI`, with touch already working; menu order is
-unrestricted. The second physical switch is on/off.
-See [hardware and screen requirements](docs/hardware-and-screen.md)
-for confirmed scope and open input details. This menu is not implemented yet.
-Desktop launchers remain available for development and compatibility.
+- **A:** two nRF24L01+ radios, ESP Wi-Fi/BLE observations, one-packet nRF peer test.
+- **B:** CC1101 433 MHz receiver and RC522 RFID observations.
+- **C:** KY-022 IR reception and optionally enabled KY-005 single-frame NEC output.
 
-`BWifiKiller/` is included as a regular folder in this repository, with its
-original license and documentation. A normal `git clone` includes the firmware
-source and USB diagnostics; no submodule commands are needed. Generated
-PlatformIO build files are excluded.
+All three current firmware profiles live in `firmware/` and run without a local
+ESP menu. `BWifiKiller/` retains the earlier standalone builds and a compatibility
+entry point for node A.
+No devices have been flashed or physically validated in this implementation.
+Exact ESP variants, B/C wiring, output circuitry and screen behavior need your
+manual verification. IR output is disabled in the default build.
 
-**Findings & Improvements** links observed exposure to specific follow-up actions
-and exports a bullet-point Markdown report or evidence JSON. Priorities are
-review suggestions, not vulnerability scores. **ESP Toolkit** registers unknown
-hardware and preserves manual observations with source, time and location.
-Instrument registration does not establish a physical connection. The new USB
-diagnostic client checks round trips, radio SPI responses, and button pin levels
-after the updated ESP firmware is installed. Scan telemetry is not implemented.
-See [SSH and USB testing](docs/ssh-and-usb-testing.md) for setup and commands.
+**Start here:** [test the dual 2.4 GHz PCB and launch on Raspberry Pi](docs/first-pcb-test.md).
 
-See [the practical workflow](docs/practical-assessment.md) for the current
-capabilities, limits, and next technical steps.
+| Your board | App role | PlatformIO profile in `firmware/` |
+| --- | --- | --- |
+| ESP1: two nRF24L01+ radios | A | `node_a` |
+| ESP2: CC1101 + RC522 RFID | B | `node_b` |
+| ESP3: IR receiver/transmitter | C | `node_c`; later `node_c_ir_tx` |
+
+See the [firmware directory](firmware/README.md) for builds and
+[integration reference](docs/sentinel-integration.md) for protocol and GPIO details.
+
+No USB ports are opened until `RF_SENTINEL_NODES` points to an explicit node
+configuration. Install `.[hardware]` for serial support. Existing network launch
+commands below also serve the console.
+
+## Network assessment and earlier firmware
+
+The same app serves network inventory, bounded service checks, HTTP/TLS
+observations, Wi-Fi inventory, baselines and assessment reports at `/`.
+See [the practical workflow](docs/practical-assessment.md) for capabilities.
+
+`BWifiKiller/` contains the earlier standalone ESP firmware with its original
+license. Its menu and `piot-usb-v1` diagnostic interface are separate from the
+current three-node console. [SSH and USB testing](docs/ssh-and-usb-testing.md)
+documents that older diagnostic workflow; use the ESP1-first guide above for
+`node_a`, `node_b` and `node_c`.
 
 ## Start on Windows
 
@@ -67,9 +77,12 @@ src/pi_ot_probe/       Python application and website assets
   diagnostics/        Live checks on your local computer
   management_api/     Separate authenticated engineering API
   simulation/         Explicit synthetic CLI example
+  peripherals/        Three-node USB transport, provisioning and evidence
   hardware/           LCD/button contracts and terminal mocks
   plugins/            Optional plugin contracts and registry
   experimental/       Deferred adapters and legacy analysis
+firmware/             Current ESP1/A, ESP2/B, ESP3/C profiles and shared protocol
+BWifiKiller/          Earlier standalone firmware and shared ESP1 PCB pin map
 tests/                Automated tests, including tests/web/
 docs/                 Usage, architecture, and learning guide
 scripts/              Environment/deployment helpers

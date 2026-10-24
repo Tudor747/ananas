@@ -40,6 +40,16 @@ class WebsiteHttpTests(unittest.TestCase):
                         return response.read().decode()
 
                 document = get("/")
+                self.assertIn("/console", document)
+                console = get("/console")
+                self.assertIn("RF Sentinel X", console)
+                self.assertIn("/static/js/console.js", console)
+                self.assertIn("OBSERVE", get("/static/js/console.js"))
+                self.assertIn(".module", get("/static/css/console.css"))
+                self.assertEqual(len(json.loads(get("/api/nodes"))["nodes"]), 3)
+                self.assertEqual(json.loads(get("/api/peripheral-events"))["events"], [])
+                self.assertFalse(json.loads(get("/api/reports/peripherals.json"))["hardware_verified"])
+                self.assertIn("RF Sentinel peripheral evidence", get("/api/reports/peripherals.md"))
                 resources = re.findall(r'(?:src|href)="(/static/[^\"]+)"', document)
                 self.assertGreaterEqual(len(resources), 2)
                 # Follow JavaScript imports, catching paths broken by a folder move.
@@ -66,6 +76,12 @@ class WebsiteHttpTests(unittest.TestCase):
                     request = Request(base + path, method="POST", data=json.dumps(payload).encode(),
                                       headers={"Content-Type": "application/json"})
                     return urlopen(request, timeout=5)
+
+                with self.assertRaises(HTTPError) as disconnected:
+                    post("/api/nodes/A/commands", {"command": "OBSERVE", "authorized": True,
+                         "operator": "test", "purpose": "fixture", "args": {"sensor": "nrf", "duration_ms": 1000}})
+                self.assertEqual(disconnected.exception.code, 400)
+                disconnected.exception.close()
 
                 with post("/api/instruments", {"name": "ESP A"}) as response:
                     self.assertEqual(response.status, 201)

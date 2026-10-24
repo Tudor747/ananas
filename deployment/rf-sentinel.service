@@ -1,0 +1,23 @@
+[Unit]
+Description=RF Sentinel X local Pi console and USB nodes
+After=network.target
+
+[Service]
+Type=simple
+# Adjust user and paths to your Pi installation before installing this example.
+User=pi
+SupplementaryGroups=dialout
+WorkingDirectory=/opt/rf-sentinel
+Environment=RF_SENTINEL_NODES=/opt/rf-sentinel/data/nodes.json
+Environment=PI_OT_DEMO_DATABASE=/opt/rf-sentinel/data/inventory.db
+ExecStart=/opt/rf-sentinel/.venv/bin/python -m uvicorn pi_ot_probe.web.app:app --host 127.0.0.1 --port 8088 --workers 1
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+KillSignal=SIGINT
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

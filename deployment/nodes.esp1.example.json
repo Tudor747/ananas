@@ -1,0 +1,3 @@
+[
+  {"node": "A", "port": "/dev/serial/by-id/REPLACE_WITH_ESP1", "device": "REPLACE_WITH_HELLO_DEVICE_ID"}
+]
