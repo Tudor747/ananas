@@ -1,5 +1,9 @@
 # BWifiKill ESP32 V4.0
 
+The parent project now includes a [native Pi tablet interface](../docs/tablet-app.md)
+with the original category names and an explicit feature-coverage table. It uses
+the Pi-controlled `node_a` firmware; it does not execute this standalone OLED menu.
+
 ## Pi USB diagnostics addition (2026-10-22)
 
 The local source now accepts bounded `PIOT1 PING ID` and `PIOT1 SELFTEST ID`

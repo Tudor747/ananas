@@ -1,0 +1,483 @@
+"""Touch-first Tk window. All device work is delegated to the backend worker."""
+from __future__ import annotations
+
+import asyncio
+import json
+import queue
+import random
+import threading
+import tkinter as tk
+
+from pi_ot_probe.collectors.interfaces import discover_local_networks
+from .catalog import CATEGORIES, TOOLS, category_tools
+
+BG = "#0c1420"
+PANEL = "#172638"
+TEXT = "#eef6ff"
+MUTED = "#a4b7cf"
+ACCENT = "#4ee3b3"
+ERROR = "#ffb5a5"
+
+
+def pretty_record(row):
+    if "ssid" in row:
+        return f"{row.get('ssid') or '(hidden SSID)'}\n  {row.get('rssi_dbm', '?')} dBm · channel {row.get('channel', '?')} · {row.get('bssid', '')}"
+    if "address" in row and "rssi_dbm" in row:
+        return f"{row.get('name') or 'Unnamed BLE device'}\n  {row['rssi_dbm']} dBm · {row['address']}"
+    if "nrf1_carrier" in row:
+        return f"nRF channel {row.get('channel')} · radio 1: {bool(row['nrf1_carrier'])} · radio 2: {bool(row.get('nrf2_carrier'))}"
+    return json.dumps(row, ensure_ascii=False, default=str)
+
+
+def format_result(result):
+    if "checks" in result:
+        return "\n\n".join(f"{'OK' if c['ok'] else 'MISSING'} · {c['name']}\n{c['detail']}" for c in result["checks"])
+    if "records" in result:
+        return "\n\n".join(pretty_record(r) for r in result["records"]) or "Observation completed. No samples were reported."
+    if "assets" in result:
+        return (f"{result['target']} · {len(result['assets'])} hosts\n\n" +
+                "\n\n".join(f"{a['ip']} · {a.get('hostname') or 'unnamed'}\n{a.get('mac') or 'MAC not observed'}" for a in result["assets"]))
+    if "snapshots" in result:
+        return "\n\n".join(f"Snapshot {i + 1}\n" + ("\n".join(pretty_record(r) for r in rows) or "No observations")
+                             for i, rows in enumerate(result["snapshots"]))
+    if "tx_completed" in result:
+        return (f"Transmit completed: {result['tx_completed']}\nMatching packet received: {result.get('matching_packet_received')}\n"
+                "Transmission alone does not prove reception.")
+    if "access_points_per_channel" in result:
+        return "Observed access points by channel\n\n" + ("\n".join(
+            f"Channel {channel}: {count} AP(s)" for channel, count in result["access_points_per_channel"].items())
+            or "No access points observed") + "\n\n" + result["note"]
+    if "devices_per_rssi_bin_dbm" in result:
+        return "Bluetooth signal distribution\n\n" + ("\n".join(
+            f"{low} to {int(low) + 9} dBm: {count} device(s)"
+            for low, count in result["devices_per_rssi_bin_dbm"].items()) or "No BLE devices observed")
+    if "sampled_channels" in result:
+        return "\n".join(f"Channel {r['channel']}: {r['hit_fraction']:.0%} hits ({r['samples']} samples per radio)"
+                         for r in result["sampled_channels"]) + "\n\n" + result["note"]
+    if "baseline_created" in result:
+        return (("First snapshot saved." if result["baseline_created"] else "Compared with the previous snapshot.") +
+                f"\nObserved now: {len(result['currently_observed'])}\n"
+                f"Newly observed: {', '.join(result['newly_observed']) or 'none'}\n"
+                f"Not observed this time: {', '.join(result['not_observed_this_time']) or 'none'}\n\n" + result["note"])
+    return json.dumps(result, indent=2, ensure_ascii=False, default=str)
+
+
+class TabletApp:
+    def __init__(self, root, backend, fullscreen=True, size=None):
+        self.root, self.backend = root, backend
+        root.title("RF Sentinel · Tablet")
+        root.configure(bg=BG)
+        width, height = size or (root.winfo_screenwidth(), root.winfo_screenheight())
+        root.geometry(f"{width}x{height}")
+        root.minsize(240, 240)
+        root.attributes("-fullscreen", fullscreen)
+        self.font_size = max(10, min(18, int(min(width / 26, height / 22))))
+        root.option_add("*Font", ("DejaVu Sans", self.font_size))
+        root.bind("<Escape>", lambda _: root.attributes("-fullscreen", False))
+        root.bind("<F11>", lambda _: root.attributes("-fullscreen", not root.attributes("-fullscreen")))
+        root.protocol("WM_DELETE_WINDOW", self.close)
+        self.category = None
+        self.page = 0
+        self.tool = None
+        self.samples = []
+        self.networks = []
+        self.ports = []
+        self.selected_port = tk.StringVar(root)
+        self.role = tk.StringVar(root, "A")
+        self.target = tk.StringVar(root)
+        self.authorized = tk.BooleanVar(root, False)
+        self.press_y = 0
+        self.closing = False
+        self.generation = 0
+        self.active_job = None
+        self.result_widget = None
+        self.graph = None
+        self.run_button = None
+        self.status = tk.StringVar(root, "Connecting to configured nodes…")
+        self.notice = tk.StringVar(root, "")
+
+        header = tk.Frame(root, bg=BG)
+        header.pack(fill="x", padx=4, pady=2)
+        self.button(header, "‹", self.back).pack(side="left")
+        self.button(header, "Home", self.home).pack(side="left", padx=3)
+        self.button(header, "×", self.close).pack(side="right")
+        self.title = tk.Label(header, text="RF Sentinel", bg=BG, fg=TEXT, anchor="w")
+        self.title.pack(side="left", fill="x", expand=True, padx=3)
+        self.status_label = tk.Label(root, textvariable=self.status, bg=BG, fg=ACCENT,
+                                     font=("DejaVu Sans", max(9, self.font_size - 2)), anchor="w")
+        self.status_label.pack(fill="x", padx=8)
+        self.footer = tk.Frame(root, bg=BG)
+        self.footer.pack(side="bottom", fill="x", padx=4, pady=3)
+        self.body = tk.Frame(root, bg=BG)
+        self.body.pack(fill="both", expand=True, padx=5, pady=3)
+        self.home()
+        self.refresh_choices()
+        self.poll()
+
+    def button(self, parent, text, command, primary=False, **kwargs):
+        return tk.Button(parent, text=text, command=command, bg=ACCENT if primary else PANEL,
+                         fg=BG if primary else TEXT, activebackground="#2c7169", activeforeground=TEXT,
+                         disabledforeground="#73869b", relief="flat", borderwidth=0,
+                         padx=9, pady=9, highlightthickness=0, **kwargs)
+
+    def reset_body(self):
+        self.generation += 1
+        for parent in (self.body, self.footer):
+            for child in parent.winfo_children():
+                child.destroy()
+        for index in range(4):
+            self.body.rowconfigure(index, weight=0, uniform="")
+            self.body.columnconfigure(index, weight=0, uniform="")
+        self.active_job = None
+        self.result_widget = self.graph = self.run_button = None
+
+    def home(self):
+        if self.backend.busy:
+            self.backend.stop()
+        self.category, self.page, self.tool = None, 0, None
+        self.show_menu()
+
+    def back(self):
+        if self.backend.busy:
+            self.backend.stop()
+        if self.tool:
+            self.tool = None
+        elif self.category:
+            self.category, self.page = None, 0
+        self.show_menu()
+
+    def open_category(self, category):
+        self.category, self.page, self.tool = category, 0, None
+        self.show_menu()
+
+    def show_menu(self):
+        self.reset_body()
+        self.title.configure(text=self.category or "RF Sentinel")
+        choices = category_tools(self.category) if self.category else list(CATEGORIES)
+        last = max(0, (len(choices) - 1) // 2)
+        self.page = min(self.page, last)
+        self.body.columnconfigure(0, weight=1)
+        for index in range(2):
+            self.body.rowconfigure(index, weight=1, uniform="tiles")
+            position = self.page * 2 + index
+            if position >= len(choices):
+                continue
+            choice = choices[position]
+            if isinstance(choice, str):
+                label, callback = choice, lambda c=choice: self.open_category(c)
+                count = sum(t.action is not None for t in category_tools(choice))
+                subtitle = f"{count} available · tap to open" if count else "Original entries · unavailable"
+            else:
+                label, callback = choice.title, lambda c=choice: self.show_tool(c)
+                subtitle = (f"ESP-{choice.node}" if choice.node else "Raspberry Pi") if choice.action else "Unavailable"
+            tile = self.button(self.body, label + "\n" + subtitle, callback, anchor="w", justify="left")
+            tile.grid(row=index, column=0, sticky="nsew", pady=3)
+            tile.bind("<Configure>", lambda e: e.widget.configure(wraplength=max(80, e.width - 24)))
+            tile.bind("<ButtonPress-1>", lambda e: setattr(self, "press_y", e.y_root))
+            tile.bind("<ButtonRelease-1>", self.menu_release)
+        previous = self.button(self.footer, "↑ Previous", lambda: self.turn_page(-1))
+        previous.pack(side="left", expand=True, fill="x")
+        previous.configure(state="normal" if self.page else "disabled")
+        tk.Label(self.footer, text=f"{self.page + 1}/{last + 1}", bg=BG, fg=MUTED).pack(side="left", padx=6)
+        following = self.button(self.footer, "Next ↓", lambda: self.turn_page(1))
+        following.pack(side="right", expand=True, fill="x")
+        following.configure(state="normal" if self.page < last else "disabled")
+
+    def menu_release(self, event):
+        delta = event.y_root - self.press_y
+        if abs(delta) > 35:
+            self.root.after_idle(lambda: self.turn_page(1 if delta < 0 else -1))
+            return "break"
+
+    def turn_page(self, amount):
+        if self.tool is None:
+            self.page = max(0, self.page + amount)
+            self.show_menu()
+
+    def scroll_area(self):
+        canvas = tk.Canvas(self.body, bg=BG, highlightthickness=0)
+        bar = tk.Scrollbar(self.body, command=canvas.yview, width=22)
+        bar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        canvas.configure(yscrollcommand=bar.set)
+        content = tk.Frame(canvas, bg=BG)
+        window = canvas.create_window((0, 0), window=content, anchor="nw")
+        content.bind("<Configure>", lambda _: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda e: canvas.itemconfigure(window, width=e.width))
+        self.scroll_canvas = canvas
+        return content
+
+    def bind_scroll(self, widget):
+        widget.bind("<ButtonPress-1>", lambda e: self.scroll_canvas.scan_mark(e.x_root, e.y_root))
+        widget.bind("<B1-Motion>", lambda e: self.scroll_canvas.scan_dragto(e.x_root, e.y_root, gain=1))
+        widget.bind("<MouseWheel>", lambda e: self.scroll_canvas.yview_scroll(-1 if e.delta > 0 else 1, "units"))
+        widget.bind("<Button-4>", lambda _: self.scroll_canvas.yview_scroll(-1, "units"))
+        widget.bind("<Button-5>", lambda _: self.scroll_canvas.yview_scroll(1, "units"))
+
+    def label(self, parent, text="", color=TEXT, variable=None):
+        label = tk.Label(parent, text=text, textvariable=variable, bg=BG, fg=color, anchor="w", justify="left")
+        label.pack(fill="x", pady=5)
+        label.bind("<Configure>", lambda e: e.widget.configure(wraplength=max(80, e.width - 8)))
+        self.bind_scroll(label)
+        return label
+
+    def show_tool(self, tool):
+        self.tool = tool
+        self.reset_body()
+        self.title.configure(text=tool.title)
+        self.samples = []
+        self.notice.set("")
+        if tool.action == "memory":
+            self.memory_game()
+            return
+        content = self.scroll_area()
+        self.label(content, tool.description, MUTED)
+        if not tool.action:
+            self.label(content, tool.unavailable, ERROR)
+            self.button(self.footer, "Back to tools", self.back).pack(fill="x")
+            return
+        if tool.node or tool.action in {"ip", "pi_wifi"}:
+            permission = tk.Checkbutton(content, text="I have permission for this test", variable=self.authorized,
+                                        bg=BG, fg=TEXT, selectcolor=PANEL, activebackground=BG,
+                                        activeforeground=TEXT, anchor="w", pady=10, wraplength=220)
+            permission.pack(fill="x")
+        if tool.action == "ip":
+            self.label(content, "Select a local subnet:")
+            for network in self.networks:
+                tk.Radiobutton(content, text=f"{network['interface']} · {network['safe_target']}",
+                               variable=self.target, value=network["safe_target"], bg=BG, fg=TEXT,
+                               selectcolor=PANEL, activebackground=BG, activeforeground=TEXT,
+                               anchor="w", pady=10, wraplength=230).pack(fill="x")
+            if not self.networks:
+                self.label(content, "No local private network found yet. Tap Refresh after connecting.", ERROR)
+            self.button(content, "Refresh networks", self.refresh_choices).pack(fill="x", pady=4)
+        if tool.action == "pair":
+            self.label(content, "Close screen and the web server first. Choose the role flashed on the connected ESP.")
+            roles = tk.Frame(content, bg=BG)
+            roles.pack(fill="x")
+            for role in "ABC":
+                tk.Radiobutton(roles, text=role, variable=self.role, value=role, indicatoron=False,
+                               bg=PANEL, fg=TEXT, selectcolor="#29644f", pady=10).pack(side="left", expand=True, fill="x")
+            for port in self.ports:
+                tk.Radiobutton(content, text=f"{port['port']}\n{port['description']}", variable=self.selected_port,
+                               value=port["port"], bg=BG, fg=TEXT, selectcolor=PANEL,
+                               anchor="w", justify="left", pady=10, wraplength=230).pack(fill="x")
+            if not self.ports:
+                self.label(content, "No serial ports detected. Connect the ESP and refresh.", ERROR)
+            self.button(content, "Refresh USB ports", self.refresh_choices).pack(fill="x", pady=4)
+        self.label(content, variable=self.notice, color=ACCENT)
+        self.graph = tk.Canvas(content, bg=PANEL, height=135, highlightthickness=0)
+        self.graph.pack(fill="x", pady=3)
+        self.graph.bind("<Configure>", lambda _: self.draw_graph())
+        self.bind_scroll(self.graph)
+        self.result_widget = tk.Text(content, height=14, bg=PANEL, fg=TEXT, wrap="word", relief="flat",
+                                     padx=8, pady=8, state="disabled", insertbackground=TEXT)
+        self.result_widget.pack(fill="both", expand=True, pady=4)
+        # Dragging a result scrolls its own content. The outer scrollbar reaches the form.
+        self.result_widget.bind("<ButtonPress-1>", lambda e: self.result_widget.scan_mark(e.x, e.y))
+        self.result_widget.bind("<B1-Motion>", lambda e: self.result_widget.scan_dragto(e.x, e.y))
+        self.run_button = self.button(self.footer, "Run", self.run_tool, primary=True)
+        self.run_button.pack(side="left", fill="x", expand=True, padx=2)
+        self.button(self.footer, "Stop", self.backend.stop).pack(side="left", fill="x", expand=True, padx=2)
+        if tool.action in {"about", "overview", "dependencies", "logs"} and not self.backend.busy:
+            self.run_tool()
+
+    def refresh_choices(self):
+        def work():
+            try:
+                from serial.tools.list_ports import comports
+                ports = [{"port": p.device, "description": p.description} for p in comports()]
+                networks = [n.to_dict() for n in asyncio.run(discover_local_networks())]
+                self.backend.emit("choices", ports=ports, networks=networks)
+            except Exception as exc:
+                self.backend.emit("choice_error", message=str(exc))
+        threading.Thread(target=work, daemon=True).start()
+
+    def run_tool(self):
+        if not self.tool:
+            return
+        try:
+            self.backend.start(self.tool.key, authorized=self.authorized.get(), target=self.target.get(),
+                               port=self.selected_port.get(), role=self.role.get())
+            self.active_job = self.backend.job_id
+            self.samples = []
+            self.notice.set("Running…")
+            self.set_result("")
+            self.draw_graph()
+        except (ValueError, KeyError) as exc:
+            self.notice.set(str(exc))
+
+    def set_result(self, text):
+        if self.result_widget:
+            self.result_widget.configure(state="normal")
+            self.result_widget.delete("1.0", "end")
+            self.result_widget.insert("end", text)
+            self.result_widget.configure(state="disabled")
+
+    def draw_graph(self):
+        if not self.graph or not self.tool:
+            return
+        graph = self.graph
+        graph.delete("all")
+        width = max(100, graph.winfo_width())
+        if not self.samples:
+            graph.create_text(10, 18, anchor="nw", fill=MUTED, text="Measurements appear here", font=("DejaVu Sans", 10))
+            return
+        action = self.tool.action
+        if action in {"channels", "bt_spectrum"}:
+            from .backend import summarize
+            summary = summarize(action, self.samples)
+            values = summary.get("access_points_per_channel", summary.get("devices_per_rssi_bin_dbm", {}))
+            rows = list(values.items())
+            maximum = max(values.values(), default=1)
+            for i, (label, count) in enumerate(rows):
+                step = (width - 16) / max(1, len(rows))
+                x = 8 + i * step
+                graph.create_rectangle(x, 100 - 70 * count / maximum, x + max(2, step - 4), 100, fill=ACCENT, outline="")
+                graph.create_text(x + step / 2, 112, text=str(label), fill=TEXT)
+                graph.create_text(x + step / 2, 90 - 70 * count / maximum, text=str(count), fill=MUTED)
+            graph.create_text(8, 4, anchor="nw", text="APs by channel" if action == "channels" else "BLE devices by RSSI bin (dBm)", fill=MUTED)
+            return
+        if action in {"nrf", "scope"}:
+            rows = [r for r in self.samples if "nrf1_carrier" in r][-40:]
+            for key, base, color in (("nrf1_carrier", 55, ACCENT), ("nrf2_carrier", 110, "#72b6ff")):
+                points = []
+                for i, row in enumerate(rows):
+                    points.extend((10 + i * (width - 20) / max(1, len(rows) - 1), base - 25 * bool(row[key])))
+                if len(points) >= 4:
+                    graph.create_line(*points, fill=color, width=2)
+                graph.create_text(8, base - 35, anchor="w", text=key.replace("_carrier", ""), fill=color)
+            return
+        if action in {"sweep", "advisor"}:
+            from .backend import summarize
+            rows = summarize("sweep", self.samples)["sampled_channels"]
+            for row in rows:
+                x = 6 + (row["channel"] / 125) * (width - 18)
+                height = 12 + row["hit_fraction"] * 80
+                graph.create_rectangle(x, 115 - height, x + max(3, width / 30), 115, fill=ACCENT, outline="")
+            graph.create_text(8, 8, anchor="nw", text="Carrier hits · sampled channels only", fill=MUTED)
+            return
+        key = "bssid" if any("bssid" in r for r in self.samples) else "address"
+        rows = list({r[key]: r for r in self.samples if key in r and "rssi_dbm" in r}.values())
+        rows.sort(key=lambda r: r["rssi_dbm"], reverse=True)
+        for i, row in enumerate(rows[:4]):
+            value = row["rssi_dbm"]
+            y = 10 + i * 30
+            graph.create_rectangle(6, y, 6 + max(0, min(1, (value + 100) / 70)) * (width - 12), y + 24,
+                                   fill="#275850", outline="")
+            name = row.get("ssid") or row.get("name") or row[key]
+            graph.create_text(10, y + 12, anchor="w", text=f"{str(name)[:22]}  {value} dBm", fill=TEXT)
+        if not rows:
+            graph.create_text(10, 18, anchor="nw", text="See readings below", fill=MUTED)
+
+    def poll(self):
+        if self.closing:
+            return
+        states = self.backend.state()
+        a = next((s for s in states if s["node"] == "A"), {})
+        if a.get("connection") == "online":
+            self.status.set(f"A: USB online · hardware {a.get('health', 'unknown')}")
+            self.status_label.configure(fg=ERROR if a.get("health") == "error" else ACCENT)
+        else:
+            self.status.set(f"A: {a.get('connection', 'unconfigured')} · System > USB Setup")
+        changed_samples = False
+        for _ in range(200):
+            try:
+                message = self.backend.messages.get_nowait()
+            except queue.Empty:
+                break
+            kind = message["kind"]
+            if message.get("job") is not None and message["job"] != self.active_job:
+                continue
+            if kind == "sample":
+                self.samples.append(message["payload"])
+                self.samples = self.samples[-1000:]
+                changed_samples = True
+            elif kind == "done":
+                changed_samples = False
+                self.notice.set(f"Complete · saved to {message['path']}")
+                result = message["result"]
+                if self.tool and self.tool.action == "about":
+                    result = {**result, "screen_pixels": [self.root.winfo_screenwidth(), self.root.winfo_screenheight()],
+                              "window_pixels": [self.root.winfo_width(), self.root.winfo_height()],
+                              "available_tools": sum(t.action is not None for t in TOOLS)}
+                self.set_result(format_result(result))
+                self.draw_graph()
+            elif kind in {"error", "cancelled", "progress", "choice_error"}:
+                self.notice.set(message["message"])
+            elif kind == "choices":
+                self.networks, self.ports = message["networks"], message["ports"]
+                if self.networks and self.target.get() not in {n["safe_target"] for n in self.networks}:
+                    self.target.set(self.networks[0]["safe_target"])
+                if self.ports and self.selected_port.get() not in {p["port"] for p in self.ports}:
+                    self.selected_port.set(self.ports[0]["port"])
+                if self.tool and self.tool.action in {"pair", "ip"} and not self.backend.busy:
+                    self.show_tool(self.tool)
+        if changed_samples:
+            self.set_result("\n\n".join(pretty_record(r) for r in self.samples[-30:]))
+            self.draw_graph()
+        if self.run_button:
+            self.run_button.configure(state="disabled" if self.backend.busy else "normal")
+        self.root.after(150, self.poll)
+
+    def memory_game(self):
+        values = list("ABCDEF") * 2
+        random.shuffle(values)
+        opened, matched = [], set()
+        buttons = []
+        generation = self.generation
+        moves = [0]
+        self.notice.set("Match the pairs")
+        for column in range(4):
+            self.body.columnconfigure(column, weight=1, uniform="cards")
+        for row in range(3):
+            self.body.rowconfigure(row, weight=1, uniform="cards")
+
+        def flip(index):
+            if index in matched or index in opened or len(opened) == 2:
+                return
+            opened.append(index)
+            buttons[index].configure(text=values[index], bg="#295c52")
+            if len(opened) == 2:
+                moves[0] += 1
+                if values[opened[0]] == values[opened[1]]:
+                    matched.update(opened)
+                    opened.clear()
+                    self.notice.set(f"{len(matched) // 2}/6 pairs · {moves[0]} turns")
+                else:
+                    def hide():
+                        if self.generation != generation:
+                            return
+                        for item in opened:
+                            buttons[item].configure(text="?", bg=PANEL)
+                        opened.clear()
+                    self.root.after(700, hide)
+
+        for index in range(12):
+            button = self.button(self.body, "?", lambda i=index: flip(i))
+            button.grid(row=index // 4, column=index % 4, sticky="nsew", padx=2, pady=2)
+            buttons.append(button)
+        tk.Label(self.footer, textvariable=self.notice, bg=BG, fg=TEXT).pack(side="left", expand=True)
+        self.button(self.footer, "New", lambda: self.show_tool(self.tool)).pack(side="right")
+
+    def close(self):
+        if self.closing:
+            return
+        self.closing = True
+        self.status.set("Stopping devices…")
+        finished = threading.Event()
+
+        def shutdown():
+            try:
+                self.backend.close()
+            finally:
+                finished.set()
+
+        threading.Thread(target=shutdown, daemon=True).start()
+
+        def finish():
+            if finished.is_set():
+                self.root.destroy()
+            else:
+                self.root.after(100, finish)
+        finish()

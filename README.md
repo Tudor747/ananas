@@ -1,5 +1,10 @@
 # RF Sentinel X · Pi + three ESP32 nodes
 
+**Native Pi touchscreen app:** run `bash scripts/setup-tablet.sh` once, then
+`bash run-tablet.sh` from the Pi desktop. See [the tablet guide](docs/tablet-app.md)
+for the BWifiKiller-style menu, actual feature coverage, dependencies and optional
+desktop startup. Stop the web app before giving the native app the ESP USB port.
+
 The Raspberry Pi 5 now has a local peripheral console at
 **http://127.0.0.1:8088/console**, alongside the network assessment website at `/`.
 It routes bounded USB commands to three independently identified ESP32 nodes,

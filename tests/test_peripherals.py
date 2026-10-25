@@ -66,6 +66,25 @@ def config(node="A"):
     return NodeConfig(node=node, port=f"port-{node}", device=f"chip-{node}")
 
 
+def test_handshake_recovers_when_startup_drops_first_hello(tmp_path):
+    class StartingSerial(FakeSerial):
+        def write(self, raw):
+            self.drop = not self.commands
+            return super().write(raw)
+
+    port = StartingSerial()
+    store = EvidenceStore(Repository(tmp_path / "startup.db"))
+    manager = NodeManager([config()], store, lambda _: port)
+    manager.start()
+    try:
+        wait_until(lambda: manager.state()[0]["connection"] == "online")
+        hellos = [c for c in port.commands if c["command"] == "HELLO"]
+        assert len(hellos) == 2
+        assert hellos[0] == hellos[1]
+    finally:
+        manager.stop()
+
+
 def test_fragmentation_overflow_resynchronization():
     decoder = Decoder()
     assert decoder.feed(b"boot log\n" + b"x" * (MAX_FRAME + 1)) == []

@@ -1,0 +1,314 @@
+"""Native app jobs. USB and subprocess work never runs on the Tk event thread."""
+from __future__ import annotations
+
+import asyncio
+from collections import Counter
+from dataclasses import asdict
+from datetime import datetime, timezone
+import getpass
+import json
+from pathlib import Path
+import queue
+import subprocess
+import sys
+import threading
+import time
+
+from pi_ot_probe.collectors.interfaces import discover_local_networks
+from pi_ot_probe.collectors.nmap import find_nmap, parse_nmap_xml
+from pi_ot_probe.collectors.targets import validate_target
+from pi_ot_probe.collectors.wifi import discover_wifi
+from pi_ot_probe.database.repository import Repository
+from pi_ot_probe.peripherals.manager import NodeManager, load_config
+from pi_ot_probe.peripherals.protocol import Command, NodeConfig
+from pi_ot_probe.peripherals.store import EvidenceStore
+from .catalog import BY_KEY
+from .diagnostics import dependencies
+
+
+def summarize(action, records):
+    """Summaries only use observed samples, never invented measurements."""
+    if action == "channels":
+        aps = {r["bssid"]: r for r in records if "bssid" in r}
+        return {"access_points_per_channel": dict(sorted(Counter(r["channel"] for r in aps.values()).items())),
+                "note": "AP counts, not channel airtime or utilization"}
+    if action == "bt_spectrum":
+        devices = {r["address"]: r for r in records if "address" in r}
+        bins = Counter((int(r["rssi_dbm"]) // 10) * 10 for r in devices.values() if "rssi_dbm" in r)
+        return {"devices_per_rssi_bin_dbm": dict(sorted(bins.items())),
+                "note": "RSSI bins span 10 dB; this is not a frequency spectrum"}
+    if action in {"sweep", "advisor"}:
+        channels = {}
+        for row in records:
+            if "channel" not in row or "nrf1_carrier" not in row:
+                continue
+            value = channels.setdefault(row["channel"], {"channel": row["channel"], "samples": 0,
+                                                        "radio1_hits": 0, "radio2_hits": 0})
+            value["samples"] += 1
+            value["radio1_hits"] += int(bool(row["nrf1_carrier"]))
+            value["radio2_hits"] += int(bool(row["nrf2_carrier"]))
+        rows = list(channels.values())
+        for row in rows:
+            row["hit_fraction"] = (row["radio1_hits"] + row["radio2_hits"]) / (2 * row["samples"])
+        if action == "advisor":
+            rows.sort(key=lambda r: (r["hit_fraction"], r["channel"]))
+        return {"sampled_channels": rows, "note": "Carrier threshold only; unsampled channels are unknown. Not a Wi-Fi channel recommendation."}
+    return {"records": records, "count": len(records)}
+
+
+class TabletBackend:
+    def __init__(self, config_path, database_path, output_dir, manager_factory=NodeManager):
+        self.config_path = Path(config_path)
+        self.output_dir = Path(output_dir)
+        self.store = EvidenceStore(Repository(database_path))
+        self.manager_factory = manager_factory
+        self.config_error = ""
+        try:
+            configs = load_config(self.config_path) if self.config_path.exists() else []
+        except (OSError, ValueError) as exc:
+            configs = []
+            self.config_error = str(exc)
+        self.manager = manager_factory(configs, self.store)
+        self.messages = queue.Queue()
+        self.cancelled = threading.Event()
+        self.closing = threading.Event()
+        self.thread = None
+        self.busy = False
+        self.last_result = None
+        self.job_id = 0
+        self._local = threading.local()
+        self.manager.start()
+
+    def emit(self, kind, **values):
+        self.messages.put({"kind": kind, "job": getattr(self._local, "job", None), **values})
+
+    def state(self):
+        return self.manager.state()
+
+    def start(self, key, authorized=False, **options):
+        if self.busy or self.closing.is_set():
+            raise ValueError("An operation is running. Stop it or wait for completion.")
+        tool = BY_KEY[key]
+        if tool.action is None:
+            raise ValueError(tool.unavailable)
+        if (tool.node or tool.action in {"ip", "pi_wifi"}) and not authorized:
+            raise ValueError("Confirm permission for this test first.")
+        self.cancelled.clear()
+        self.busy = True
+        self.job_id += 1
+        job_id = self.job_id
+
+        def work():
+            self._local.job = job_id
+            try:
+                result = self.execute(tool.action, tool.node, tool.title, **options)
+                self._check_cancelled()
+                self.last_result = {"tool": key, "title": tool.title,
+                                    "received_at": datetime.now(timezone.utc).isoformat(),
+                                    "source": f"ESP-{tool.node} USB" if tool.node else "Raspberry Pi",
+                                    "result": result}
+                saved = self.save_report(self.last_result)
+                self.emit("done", result=result, path=str(saved))
+            except InterruptedError:
+                self.emit("cancelled", message="Stopped. Partial samples are retained in the evidence log.")
+            except Exception as exc:
+                self.emit("error", message=str(exc))
+            finally:
+                self.busy = False
+
+        self.thread = threading.Thread(target=work, name="tablet-job", daemon=True)
+        self.thread.start()
+
+    def _check_cancelled(self):
+        if self.cancelled.is_set() or self.closing.is_set():
+            raise InterruptedError("Stopped")
+
+    def _cursor(self):
+        with self.store.repository.connect() as db:
+            return db.execute("SELECT COALESCE(MAX(id), 0) FROM peripheral_events").fetchone()[0]
+
+    def request(self, node, command, args, purpose, duration=0):
+        self._check_cancelled()
+        before = self._cursor()
+        state = next(s for s in self.state() if s["node"] == node)
+        if state["connection"] != "online":
+            raise ValueError(f"ESP-{node}: {state.get('error') or state['connection']}. Use System > USB Setup if unconfigured.")
+        session = state["session"]
+        request_id = self.manager.command(node, Command(command=command, args=args, authorized=True,
+                                                       operator=getpass.getuser()[:80], purpose=purpose[:200]))
+        deadline = time.monotonic() + duration / 1000 + 10
+        records = []
+        while time.monotonic() < deadline:
+            self._check_cancelled()
+            state = next(s for s in self.state() if s["node"] == node)
+            if state["connection"] != "online" or state.get("session") != session:
+                raise OSError(f"ESP-{node} disconnected: {state.get('error') or 'connection changed'}")
+            for event in self.store.events(after=before, limit=200):
+                before = event["id"]
+                data = event["data"]
+                if (event["node"] != node or event["session"] != session or
+                        event["kind"] not in {"reply", "event"} or
+                        data.get("id") != request_id or data.get("command") != command):
+                    continue
+                payload = data["payload"]
+                if payload.get("error"):
+                    raise ValueError(str(payload["error"]))
+                if data["health"] == "unsupported":
+                    raise ValueError("The installed firmware does not support this command.")
+                if command != "OBSERVE":
+                    return payload
+                if event["kind"] == "event":
+                    if payload.get("complete"):
+                        return records
+                    records.append(payload)
+                    self.emit("sample", payload=payload)
+            if self.cancelled.wait(.05):
+                self._check_cancelled()
+        self.stop()
+        raise TimeoutError(f"No completed {command} result from ESP-{node}")
+
+    def observe(self, sensor, purpose, duration=5000, node="A"):
+        return self.request(node, "OBSERVE", {"sensor": sensor, "duration_ms": duration}, purpose, duration)
+
+    def execute(self, action, node, purpose, **options):
+        if action in {"wifi", "ble", "nrf", "cc1101", "rfid", "ir", "scope"}:
+            return summarize(action, self.observe("nrf" if action == "scope" else action, purpose, node=node))
+        if action in {"channels", "bt_spectrum"}:
+            return summarize(action, self.observe("wifi" if action == "channels" else "ble", purpose))
+        if action in {"radar", "bt_analyzer"}:
+            snapshots = []
+            for i in range(3):
+                self.emit("progress", message=f"Snapshot {i + 1}/3")
+                snapshots.append(self.observe("wifi" if action == "radar" else "ble", purpose))
+            return {"snapshots": snapshots, "note": "Separate signal snapshots; addresses may rotate. No distance or bearing measurement."}
+        if action == "sentinel":
+            records = self.observe("wifi", purpose)
+            path = self.output_dir / "wifi-snapshot.json"
+            old = json.loads(path.read_text()) if path.exists() else None
+            current = {r["bssid"]: r for r in records if "bssid" in r}
+            result = {"baseline_created": old is None, "currently_observed": list(current.values()),
+                      "newly_observed": sorted(current.keys() - (old or {}).keys()),
+                      "not_observed_this_time": sorted((old or {}).keys() - current.keys()),
+                      "note": "Compared with the preceding snapshot; absence is not proof of a missing device."}
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(current, indent=2), encoding="utf-8")
+            return result
+        if action in {"sweep", "advisor"}:
+            records = []
+            for index, channel in enumerate(range(0, 126, 5)):
+                self.emit("progress", message=f"Receive sample {index + 1}/26 · nRF channel {channel}")
+                self.request("A", "SET_CONFIG", {"channel": channel}, purpose)
+                records.extend(self.observe("nrf", purpose, duration=350))
+            # The following packet test explicitly sets its own channel.
+            return summarize(action, records)
+        if action == "link":
+            self.request("A", "SET_CONFIG", {"channel": 76}, purpose)
+            return self.request("A", "TRANSMIT", {"test": "nrf_link"}, purpose)
+        if action == "coex":
+            result = {"note": "Sequential inventories; not simultaneous measurements or proof of interference."}
+            for sensor in ("wifi", "ble", "nrf"):
+                self.emit("progress", message=f"Observing {sensor}")
+                result[sensor] = self.observe(sensor, purpose)
+            return result
+        if action == "ip":
+            return self.network_scan(options.get("target", ""))
+        if action == "pi_wifi":
+            return {"source": "Pi NetworkManager", "access_points": [asdict(ap) for ap in asyncio.run(discover_wifi())]}
+        if action == "dependencies":
+            return {"checks": dependencies(self.config_path)}
+        if action == "pair":
+            return self.pair(options.get("role", "A"), options["port"])
+        if action == "logs":
+            return {"events": self.store.events(after=max(0, self._cursor() - 100), limit=100)}
+        if action in {"overview", "about"}:
+            return {"nodes": self.state(), "configuration": str(self.config_path.resolve()),
+                    "configuration_error": self.config_error, "python": sys.version.split()[0],
+                    "interface": "Native Tk touchscreen", "reports": str(self.output_dir.resolve())}
+        raise ValueError("This action is handled by the display.")
+
+    def network_scan(self, target):
+        networks = asyncio.run(discover_local_networks())
+        validated = validate_target(target, networks)
+        binary = find_nmap()
+        if not binary:
+            raise ValueError("Nmap is missing. Install on the Pi: sudo apt install nmap")
+        self.emit("progress", message=f"Discovering {validated}; this may take up to three minutes")
+        process = subprocess.Popen([binary, "-sn", "-n", "--max-rate", "20", "--max-retries", "1",
+                                    "--host-timeout", "10s", "-oX", "-", str(validated)],
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            deadline = time.monotonic() + 180
+            while True:
+                self._check_cancelled()
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("Nmap discovery exceeded three minutes")
+                try:
+                    stdout, stderr = process.communicate(timeout=.2)
+                    break
+                except subprocess.TimeoutExpired:
+                    pass
+            if process.returncode:
+                raise RuntimeError(stderr.decode(errors="replace")[:600] or "Nmap failed")
+            return {"target": str(validated), "source": "Pi Nmap host discovery",
+                    "assets": [a.to_dict() for a in parse_nmap_xml(stdout.decode(errors="replace"))]}
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.communicate(timeout=2)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.communicate()
+
+    def pair(self, role, port):
+        if role not in {"A", "B", "C"}:
+            raise ValueError("Choose role A, B or C")
+        self.manager.stop()
+        try:
+            self._check_cancelled()
+            result = subprocess.run([sys.executable, "-m", "pi_ot_probe.peripherals.provision",
+                                     "--node", role, "--port", port],
+                                    capture_output=True, text=True, timeout=12)
+            if result.returncode:
+                raise ValueError((result.stdout + result.stderr).strip()[-600:])
+            identified = NodeConfig.model_validate(json.loads(result.stdout))
+            current = load_config(self.config_path) if self.config_path.exists() else []
+            current = [c for c in current if c.node != role] + [identified]
+            for field in ("port", "device"):
+                if len({getattr(c, field) for c in current}) != len(current):
+                    raise ValueError(f"This {field} is already assigned to another role.")
+            self._check_cancelled()
+            self.config_path.parent.mkdir(parents=True, exist_ok=True)
+            if self.config_path.exists():
+                self.config_path.with_suffix(".json.bak").write_bytes(self.config_path.read_bytes())
+            temporary = self.config_path.with_suffix(".json.tmp")
+            temporary.write_text(json.dumps([c.model_dump() for c in current], indent=2) + "\n", encoding="utf-8")
+            temporary.replace(self.config_path)
+            self.manager = self.manager_factory(current, self.store)
+            self.config_error = ""
+            return identified.model_dump()
+        finally:
+            if not self.closing.is_set():
+                self.manager.start()
+
+    def save_report(self, value):
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        path = self.output_dir / (datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ") + ".json")
+        path.write_text(json.dumps(value, indent=2, default=str) + "\n", encoding="utf-8")
+        return path
+
+    def stop(self):
+        self.cancelled.set()
+        for state in self.state():
+            if state["connection"] == "online":
+                try:
+                    self.manager.command(state["node"], Command(command="STOP"))
+                except ValueError:
+                    pass
+
+    def close(self):
+        self.closing.set()
+        self.stop()
+        if self.thread:
+            self.thread.join(timeout=15)
+        self.manager.stop()

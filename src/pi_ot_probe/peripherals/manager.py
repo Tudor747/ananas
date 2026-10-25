@@ -133,6 +133,9 @@ class NodeWorker:
         def send(command, request_id, args):
             nonlocal pending
             raw = self.encode(command, request_id, args)
+            if command == "HELLO":
+                # Discard any partial input left by startup or an earlier connection.
+                raw = b"\n" + raw
             if port.write(raw) != len(raw):
                 raise OSError("incomplete serial write")
             pending = (request_id, command, time.monotonic() + 4)
@@ -142,10 +145,14 @@ class NodeWorker:
             self.counter += 1
             hello_id = self.counter
         send("HELLO", hello_id, {})
+        hello_deadline = time.monotonic() + 8
+        next_hello = time.monotonic() + 1
         try:
             while not self.stop_event.is_set():
                 now = time.monotonic()
-                if pending and now >= pending[2]:
+                if not identified and now >= hello_deadline:
+                    raise TimeoutError("HELLO timed out after 8 seconds of handshake retries")
+                if identified and pending and now >= pending[2]:
                     raise TimeoutError(f"{pending[1]} timed out; command was not retried")
                 for frame in decoder.feed(port.read(256)):
                     if frame.node != self.config.node or frame.device != self.config.device:
@@ -180,6 +187,10 @@ class NodeWorker:
                     self.store.append(self.config.node, self.session, "malformed_frame",
                                       {"count": decoder.rejected - rejected}, "host")
                     rejected = decoder.rejected
+                # Only identification is retried; never replay an operation.
+                if not identified and time.monotonic() >= next_hello:
+                    send("HELLO", hello_id, {})
+                    next_hello = time.monotonic() + 1
                 # A STOP can preempt a lost reply; it never waits for timeout.
                 with self.lock:
                     item = None

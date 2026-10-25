@@ -25,6 +25,7 @@ docs = [
 pi-ot-probe = "pi_ot_probe.main:main"
 pi-ot-local-check = "pi_ot_probe.diagnostics.local_check:main"
 pi-ot-esp-check = "pi_ot_probe.diagnostics.esp_check:main"
+rf-sentinel-tablet = "pi_ot_probe.tablet.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

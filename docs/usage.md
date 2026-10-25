@@ -1,5 +1,8 @@
 # Run and use the local website
 
+For the native Python touchscreen interface, use the [tablet app guide](tablet-app.md).
+It now provides two-option touch menus independently of the website described below.
+
 SSH operation and optional ESP USB self-tests are documented in
 [SSH and USB testing](ssh-and-usb-testing.md). The new firmware addition must be flashed
 before the ESP can answer; physical deployment has not been verified here.
