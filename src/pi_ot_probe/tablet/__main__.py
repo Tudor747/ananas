@@ -1,6 +1,8 @@
 """python -m pi_ot_probe.tablet --check works from SSH; GUI needs the Pi desktop."""
 import argparse
 import json
+import logging
+from logging.handlers import RotatingFileHandler
 import os
 from pathlib import Path
 import sys
@@ -48,6 +50,13 @@ def main(argv=None):
     from .app import TabletApp
     from .backend import TabletBackend
     try:
+        args.database.parent.mkdir(parents=True, exist_ok=True)
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s %(levelname)s %(threadName)s %(name)s: %(message)s",
+            handlers=[logging.StreamHandler(), RotatingFileHandler(
+                args.database.with_suffix(".log"), maxBytes=1_000_000, backupCount=2, encoding="utf-8")],
+        )
         backend = TabletBackend(args.nodes, args.database, args.reports)
     except Exception as exc:
         root.destroy()

@@ -1,9 +1,27 @@
 """Read-only checks, usable through SSH without loading the GUI."""
+import asyncio
 import importlib
 import os
 import shutil
 import sys
 from pathlib import Path
+
+from pi_ot_probe.collectors.interfaces import discover_local_networks
+from pi_ot_probe.peripherals.ports import serial_ports
+
+
+def discover_choices():
+    """A missing serial package must not hide usable network interfaces, or vice versa."""
+    ports, networks, errors = [], [], []
+    try:
+        ports = serial_ports()
+    except Exception as exc:
+        errors.append(f"USB discovery: {exc}")
+    try:
+        networks = [n.to_dict() for n in asyncio.run(discover_local_networks())]
+    except Exception as exc:
+        errors.append(f"Network discovery: {exc}")
+    return {"ports": ports, "networks": networks, "errors": errors}
 
 
 def dependencies(config_path=None):

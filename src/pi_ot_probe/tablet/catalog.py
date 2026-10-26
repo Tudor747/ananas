@@ -13,7 +13,8 @@ class Tool:
     unavailable: str = ""
 
 
-CATEGORIES = ("Wi-Fi", "RF Tools", "Bluetooth", "Illegal", "Games", "System", "Other boards")
+CATEGORIES = ("System", "Wi-Fi", "RF Tools", "Bluetooth", "Other boards", "Games", "Illegal")
+NODE_NAMES = {"A": "Wi-Fi / BLE / nRF", "B": "433 MHz / RFID", "C": "Infrared"}
 TOOLS = (
     Tool("wifi", "Wi-Fi Scanner", "Wi-Fi", "wifi", "Nearby 2.4 GHz access points observed by ESP-A.", "A"),
     Tool("radar", "Wi-Fi Radar", "Wi-Fi", "radar", "Three signal snapshots. Signal strength does not measure distance or bearing.", "A"),
@@ -44,11 +45,11 @@ TOOLS = (
         ("deauther", "Deauther", "Not enabled: broadcast disconnect attacks are not provided."),
     )),
     Tool("arcade", "Arcade", "Games", "memory", "Touch memory game for the Pi. The original ESP arcade games have not been ported."),
-    Tool("slave", "Slave Control", "System", "overview", "Connected-node status and stop controls. Original standalone slave mode is not used."),
+    Tool("usb", "USB Setup", "System", "pair", "Connect each ESP once by its role and USB port. Existing assignments are preserved."),
+    Tool("slave", "Devices", "System", "overview", "Live status for all three ESPs. Tap USB Setup to add a board or change its port."),
     Tool("logs", "View Logs", "System", "logs", "Recent device evidence, replies and errors. Export a JSON report to the Pi."),
     Tool("about", "About", "System", "about", "App version, screen size and feature availability."),
     Tool("dependencies", "Dependencies", "System", "dependencies", "Check Python packages, Nmap, USB permissions and desktop availability."),
-    Tool("usb", "USB Setup", "System", "pair", "Read the ESP identity automatically. Stop the web app before using native USB control."),
     Tool("pi_wifi", "Pi Wi-Fi Scan", "System", "pi_wifi", "Use NetworkManager on the Pi. ESP Wi-Fi scanning does not need NetworkManager."),
     Tool("cc1101", "433 MHz / CC1101", "Other boards", "cc1101", "Receive RSSI from node B's configured radio.", "B"),
     Tool("rfid", "RFID / RC522", "Other boards", "rfid", "Observe a compatible tag with node B.", "B"),

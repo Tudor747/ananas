@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections import deque
 import json
+import logging
 import os
 from pathlib import Path
 import secrets
@@ -10,6 +11,13 @@ import threading
 import time
 
 from .protocol import Command, Decoder, NodeConfig, ROLES
+
+logger = logging.getLogger(__name__)
+
+
+def port_key(port):
+    """Compare USB aliases as the same endpoint, including Linux by-id paths."""
+    return os.path.normcase(os.path.realpath(port))
 
 
 def serial_open(path):
@@ -33,7 +41,8 @@ def load_config(path=None):
         raise ValueError("node configuration must be a list of at most three entries")
     nodes = [NodeConfig.model_validate(item) for item in raw]
     for key in ("node", "port", "device"):
-        if len({getattr(n, key) for n in nodes}) != len(nodes):
+        values = [port_key(n.port) if key == "port" else getattr(n, key) for n in nodes]
+        if len(set(values)) != len(nodes):
             raise ValueError(f"duplicate node configuration {key}")
     return nodes
 
@@ -58,11 +67,13 @@ class NodeWorker:
         with self.lock:
             self.state.update(values)
 
-    def enqueue(self, command):
+    def enqueue(self, command, expected_session=None):
         command.check(self.config.node)
         with self.lock:
-            if self.state["connection"] != "online":
+            if self.stop_event.is_set() or self.state["connection"] != "online":
                 raise ValueError("node is not identified and online")
+            if expected_session is not None and expected_session != self.session:
+                raise ValueError("node reconnected before the command was queued; run the test again")
             if len(self.queue) >= 8 and command.command != "STOP":
                 raise ValueError("node command queue is full")
             self.counter += 1
@@ -81,9 +92,14 @@ class NodeWorker:
             return self.counter
 
     def start(self):
-        self.stop_event.clear()
-        self.thread = threading.Thread(target=self.run, name=f"sentinel-{self.config.node}", daemon=True)
-        self.thread.start()
+        with self.lock:
+            if self.thread and self.thread.is_alive():
+                if self.stop_event.is_set():
+                    raise RuntimeError(f"ESP-{self.config.node} is still stopping")
+                return
+            self.stop_event.clear()
+            self.thread = threading.Thread(target=self.run, name=f"sentinel-{self.config.node}", daemon=True)
+            self.thread.start()
 
     def stop(self):
         self.stop_event.set()
@@ -94,27 +110,35 @@ class NodeWorker:
         while not self.stop_event.is_set():
             port = None
             try:
-                self.update(connection="connecting", health="unknown", error=None)
+                self.update(connection="connecting", health="unknown")
                 port = self.opener(self.config.port)
                 self.session = secrets.token_hex(16)
                 self.connected(port)
             except Exception as exc:
-                self.update(connection="offline", health="unknown", error=str(exc)[:300])
-                self.store.append(self.config.node, self.session, "disconnect", {"reason": str(exc)[:300]}, "host")
+                reason = str(exc)[:300]
+                previous_error = self.snapshot().get("error")
+                self.update(connection="offline", health="unknown", error=reason)
+                if reason != previous_error:
+                    logger.warning("ESP-%s connection failed: %s", self.config.node, reason, exc_info=True)
+                    self.store.append(self.config.node, self.session, "disconnect", {"reason": reason}, "host")
             finally:
+                # Refuse new work before releasing the port or cancelling its queue.
+                self.update(connection="offline", health="unknown")
                 if port is not None:
                     try:
                         # Best effort only: the device also has a local duration/watchdog limit.
                         port.write(self.encode("STOP", 0, {}))
                     except Exception:
-                        pass
-                    port.close()
+                        logger.debug("ESP-%s shutdown STOP failed", self.config.node, exc_info=True)
+                    try:
+                        port.close()
+                    except Exception:
+                        logger.warning("ESP-%s serial close failed", self.config.node, exc_info=True)
                 with self.lock:
                     for request_id, queued in self.queue:
                         self.store.append(self.config.node, self.session, "cancelled",
                                           {"id": request_id, "command": queued.command}, "host")
                     self.queue.clear()
-                self.update(connection="offline", health="unknown")
             self.stop_event.wait(2)
 
     def encode(self, command, request_id, args):
@@ -129,8 +153,9 @@ class NodeWorker:
         pending = None
         next_heartbeat = 0
         rejected = 0
+        last_status = None
 
-        def send(command, request_id, args):
+        def send(command, request_id, args, heartbeat=False):
             nonlocal pending
             raw = self.encode(command, request_id, args)
             if command == "HELLO":
@@ -138,8 +163,9 @@ class NodeWorker:
                 raw = b"\n" + raw
             if port.write(raw) != len(raw):
                 raise OSError("incomplete serial write")
-            pending = (request_id, command, time.monotonic() + 4)
-            self.store.append(self.config.node, self.session, "sent", json.loads(raw), "host")
+            pending = (request_id, command, time.monotonic() + 4, heartbeat)
+            if not heartbeat:
+                self.store.append(self.config.node, self.session, "sent", json.loads(raw), "host")
 
         with self.lock:
             self.counter += 1
@@ -155,6 +181,7 @@ class NodeWorker:
                 if identified and pending and now >= pending[2]:
                     raise TimeoutError(f"{pending[1]} timed out; command was not retried")
                 for frame in decoder.feed(port.read(256)):
+                    record = True
                     if frame.node != self.config.node or frame.device != self.config.device:
                         raise ValueError("USB identity does not match configured node/device")
                     if frame.session != self.session:
@@ -177,11 +204,17 @@ class NodeWorker:
                         if not pending or (frame.id, frame.command) != pending[:2]:
                             self.store.append(self.config.node, self.session, "unmatched_reply", frame.model_dump())
                             continue
+                        if pending[3]:
+                            status = (frame.health, frame.payload)
+                            record = status != last_status
+                            last_status = status
                         pending = None
                         next_heartbeat = now + 1
                     elif frame.command != "OBSERVE" or frame.payload.get("sensor") not in ROLES[self.config.node]:
                         raise ValueError("unexpected event sensor/command")
-                    self.store.append(self.config.node, self.session, frame.type, frame.model_dump())
+                    # Keep health changes and operator requests, not identical idle heartbeats.
+                    if record:
+                        self.store.append(self.config.node, self.session, frame.type, frame.model_dump())
                     self.update(health=frame.health, last_seq=last_seq, last_seen=time.time(), error=None)
                 if decoder.rejected != rejected:
                     self.store.append(self.config.node, self.session, "malformed_frame",
@@ -193,6 +226,8 @@ class NodeWorker:
                     next_hello = time.monotonic() + 1
                 # A STOP can preempt a lost reply; it never waits for timeout.
                 with self.lock:
+                    if self.stop_event.is_set():
+                        break
                     item = None
                     if identified and self.queue and (not pending or self.queue[0][1].command == "STOP"):
                         item = self.queue.popleft()
@@ -203,7 +238,7 @@ class NodeWorker:
                         send(item[1].command, item[0], item[1].args)
                     elif identified and not pending and now >= next_heartbeat:
                         self.counter += 1
-                        send("STATUS", self.counter, {})
+                        send("STATUS", self.counter, {}, heartbeat=True)
         finally:
             if pending:
                 self.store.append(self.config.node, self.session, "unconfirmed",
@@ -229,7 +264,7 @@ class NodeManager:
         return [self.workers[n].snapshot() if n in self.workers else
                 {"node": n, "connection": "unconfigured", "health": "unknown"} for n in ROLES]
 
-    def command(self, node, command):
+    def command(self, node, command, expected_session=None):
         if node not in self.workers:
             raise ValueError("node is not configured")
-        return self.workers[node].enqueue(command)
+        return self.workers[node].enqueue(command, expected_session=expected_session)

@@ -49,7 +49,8 @@ The window starts full screen using the detected display resolution. There are
 two large choices per menu page. Swipe vertically or use Previous/Next; tap a
 tool to open it. Home and Back are always accessible. Scroll tool pages using
 the right scrollbar or drag the descriptions; drag inside results to scroll
-the results. Stop cancels a running operation. Home/Back also stop active work.
+the results. **Stop all** cancels the current job and sends STOP to every connected
+ESP. Home/Back also stop active work.
 The X button closes the app and stops its devices. Escape leaves fullscreen;
 F11 toggles it. No physical GPIO button mapping is added.
 
@@ -66,10 +67,13 @@ display connection must actually be available, not just a DISPLAY variable.
 
 ## First use
 
-1. If the node is unconfigured, open **System > USB Setup**.
-2. Select role A for `node_a`, choose the ESP USB port, and tap Run. This reads
+1. Open **System > USB Setup** (System is on the first home page). You can also
+   tap the connection strip at the top when no boards are configured.
+2. Select role A for `node_a`, choose the ESP USB port, and tap **Connect**. This reads
    the identity, backs up an existing configuration, and preserves other roles.
-3. Wait for **A: USB online**. Hardware error is a separate firmware health
+3. Wait for **A: ready** or **A: HW error**. Both mean USB identification succeeded;
+   tap the connection strip for **Devices**, which shows live details for A/B/C.
+   Hardware error is a separate firmware health
    report. On node A, failed nRF initialization can coexist with working Wi-Fi/BLE.
 4. Open **Wi-Fi > Wi-Fi Scanner**, confirm permission for the test, and tap Run.
    Scans finish after a bounded observation. An empty result is shown as such.
@@ -77,8 +81,61 @@ display connection must actually be available, not just a DISPLAY variable.
    `data/tablet-reports/`; **System > View Logs** provides recent USB evidence.
 
 The current `node_a`, `node_b`, and `node_c` USB commands are reused. The native
-app itself requires no new firmware upload if those profiles already respond to
-HELLO. Original BWifiKiller standalone binaries use a different interface.
+app works with existing profiles that respond to HELLO. The updated `node_a`
+also fixes BLE results lost at the deadline, Wi-Fi results cut short at the deadline,
+and failed Wi-Fi scans reported as empty successes; rebuild/upload A to get those
+firmware fixes. Original BWifiKiller standalone binaries use a different interface.
+
+## Working with all three boards
+
+| Role | Firmware | Tablet tools |
+| --- | --- | --- |
+| A | `node_a` | Wi-Fi, Bluetooth, RF Tools |
+| B | `node_b` | Other boards > 433 MHz / CC1101 and RFID / RC522 |
+| C | `node_c` | Other boards > Infrared Receiver |
+
+Set up B and C in the same USB Setup screen. Ports already assigned to another
+role are labelled and disabled. Each connection checks the board's stored device
+identity, so a swapped cable cannot silently send A's commands to B. Setup briefly
+pauses all USB workers, preserves the other roles, and reconnects them afterwards.
+An existing configuration is backed up to `nodes.json.bak` before a successful change.
+
+On Linux, the port picker prefers `/dev/serial/by-id/` and falls back to
+`/dev/serial/by-path/` when available. A by-path name depends on the USB socket:
+keep those boards in the same sockets. With only `/dev/ttyUSB*` names available,
+recheck assignments after reconnecting cables or rebooting. Stable names prevent
+renumbering problems; the ESP identity check remains the final guard.
+If two ports have swapped, use **Forget ESP-A setup** and **Forget ESP-B setup**
+under the corresponding role, then connect each again to its current port. This
+removes only the selected assignment and keeps evidence, reports and other roles.
+
+All three connections stay online independently. The tablet runs one selected tool
+at a time; a healthy A/C connection continues if B disconnects. Reconnection is
+automatic, but an interrupted test must be started again explicitly. Commands,
+especially transmissions, are never replayed after a disconnect. Tools for an
+offline board keep Run disabled and show the connection problem and setup shortcut.
+
+If boards repeatedly restart when all three are plugged in, check the Pi supply,
+USB cables, hub power and peripheral supplies before changing software. The
+automated checks do not validate the power budget or physical wiring.
+
+## Finding a problem
+
+- Tap the connection strip or open **System > Devices** for each board's port,
+  device ID, firmware build, hardware health and last connection error.
+- **System > View Logs** shows USB commands, observations and connection failures.
+  Repeated unchanged background STATUS replies are omitted; operator requests,
+  health transitions and timeout failures remain recorded. Device sequence numbers
+  can therefore jump between stored heartbeat records without implying lost USB data.
+  Identical connection errors are recorded once until the error changes or a
+  connection succeeds; unplugged boards still retry every two seconds.
+- Full Python error traces are written to `data/tablet.log` by default, next to the
+  selected database. Logs rotate at 1 MB with two backups. Reports remain in
+  `data/tablet-reports/`; USB evidence remains in `data/tablet.db`.
+- A USB connection with `HW error` is different from a disconnected ESP. For
+  example, failed nRF initialization need not prevent ESP-A's Wi-Fi scanner working.
+- An empty result means a completed observation found no samples. A firmware scan
+  error or timeout is shown as an error, and no successful report is saved for it.
 
 ## Feature coverage
 
@@ -97,7 +154,7 @@ HELLO. Original BWifiKiller standalone binaries use a different interface.
 | BT Scanner / BT Analyzer | Passive BLE inventory and three signal snapshots |
 | BT Spectrum | RSSI histogram; not an RF frequency spectrum |
 | Arcade | A new touch memory game; original ESP games are not ported |
-| Slave Control | Native node overview and STOP; original slave protocol is not ported |
+| Devices (formerly Slave Control) | Live A/B/C overview and Stop all; original slave protocol is not ported |
 | View Logs / About | Local evidence, runtime and screen information |
 | Additional System tools | Dependencies, automatic USB identity setup, Pi Wi-Fi scan |
 | Additional B/C tools | CC1101 reception, RC522 tag observations, IR reception |
@@ -139,7 +196,8 @@ the tablet. Nmap is invoked as the logged-in user, without sudo.
 
 ## Files and validation
 
-`src/pi_ot_probe/tablet/` contains the catalog, backend, diagnostics and Tk UI.
+`src/pi_ot_probe/tablet/` contains the catalog, backend, diagnostics, result
+formatting (`presentation.py`) and Tk UI (`app.py`).
 The app reuses the existing bounded `NodeManager` and USB evidence store. It
 uses `data/tablet.db` by default, separate from the web database. `--database`,
 `--nodes`, and `--reports` override paths; `RF_SENTINEL_NODES` also selects the

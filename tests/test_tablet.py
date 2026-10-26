@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import queue
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 import time
 
 import pytest
@@ -196,8 +197,89 @@ def test_pair_saves_actual_identity_preserving_other_nodes(tmp_path, monkeypatch
         assert app.pair("A", "port-a") == actual
         assert json.loads(config.read_text()) == original + [actual]
         assert json.loads(config.with_suffix(".json.bak").read_text()) == original
+        report = app.save_report({"result": "kept"})
+        app.store.append("A", "test-session", "fixture", {"sample": 1})
+        assert app.unpair("A") == {"node": "A", "unconfigured": True}
+        assert json.loads(config.read_text()) == original
+        assert json.loads(config.with_suffix(".json.bak").read_text()) == original + [actual]
+        assert report.exists()
+        assert app.store.events()[0]["data"] == {"sample": 1}
+        assert [c.node for c in app.manager.configs] == ["B"]
     finally:
         app.close()
+
+
+def test_stop_during_submission_cannot_restart_observation(native, monkeypatch):
+    app, port = native
+    original_state = app.state
+    def interrupted_state():
+        states = original_state()
+        monkeypatch.setattr(app, "state", original_state)
+        app.stop()
+        return states
+    monkeypatch.setattr(app, "state", interrupted_state)
+    with pytest.raises(InterruptedError):
+        app.observe("wifi", "race regression")
+    assert not any(c["command"] == "OBSERVE" for c in port.commands)
+
+
+def test_pair_requires_a_port_before_stopping_nodes(native, monkeypatch):
+    app, _ = native
+    monkeypatch.setattr(app.manager, "stop", lambda: pytest.fail("nodes should remain online"))
+    with pytest.raises(ValueError, match="Select a USB port"):
+        app.pair("A", "")
+    monkeypatch.undo()
+
+
+def test_all_three_nodes_keep_observations_separate(tmp_path):
+    class SensorSerial(FakeSerial):
+        def write(self, raw):
+            request = json.loads(raw)
+            written = super().write(raw)
+            if request["command"] == "OBSERVE":
+                for payload in ({"sensor": request["args"]["sensor"], "reading_from": self.node},
+                                {"sensor": request["args"]["sensor"], "complete": True}):
+                    self.seq += 1
+                    self.buffer.extend(wire(node=self.node, device=f"chip-{self.node}", seq=self.seq,
+                                            session=request["session"], id=request["id"],
+                                            type="event", command="OBSERVE", payload=payload))
+            return written
+
+    ports = {role: SensorSerial(role) for role in "ABC"}
+    config = tmp_path / "nodes.json"
+    config.write_text(json.dumps([{"node": role, "port": role, "device": f"chip-{role}"} for role in ports]))
+    app = TabletBackend(config, tmp_path / "db", tmp_path / "reports",
+                        lambda configs, store: NodeManager(configs, store, ports.__getitem__))
+    try:
+        wait_until(lambda: all(s["connection"] == "online" for s in app.state()))
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            jobs = [executor.submit(app.observe, sensor, "three-board regression", 500, role)
+                    for role, sensor in (("A", "nrf"), ("B", "rfid"), ("C", "ir"))]
+            results = [job.result(timeout=5) for job in jobs]
+        assert [[row["reading_from"] for row in result] for result in results] == [["A"], ["B"], ["C"]]
+        app.stop()
+        wait_until(lambda: all(any(c["command"] == "STOP" for c in port.commands) for port in ports.values()))
+    finally:
+        app.close()
+
+
+@pytest.mark.parametrize("failure", ["usb", "network"])
+def test_device_discovery_failures_are_independent(failure, monkeypatch):
+    from pi_ot_probe.tablet import diagnostics
+    def ports():
+        if failure == "usb":
+            raise ImportError("pyserial is missing")
+        return [{"port": "port-B", "description": "ESP B"}]
+    async def networks():
+        if failure == "network":
+            raise OSError("interface lookup failed")
+        return [LocalNetwork("eth0", "192.168.1.2", "192.168.1.0/24", "192.168.1.0/24")]
+    monkeypatch.setattr(diagnostics, "serial_ports", ports)
+    monkeypatch.setattr(diagnostics, "discover_local_networks", networks)
+    choices = diagnostics.discover_choices()
+    assert bool(choices["ports"]) == (failure != "usb")
+    assert bool(choices["networks"]) == (failure != "network")
+    assert len(choices["errors"]) == 1
 
 
 def test_no_window_needed_for_cli_checks(monkeypatch, capsys):
@@ -215,7 +297,7 @@ def test_native_layout_and_navigation(size, monkeypatch):
     class Backend:
         busy = False
         messages = queue.Queue()
-        def state(self): return [{"node": "A", "connection": "unconfigured"}]
+        def state(self): return [{"node": role, "connection": "unconfigured"} for role in "ABC"]
         def stop(self): pass
     try:
         root = tk.Tk()
@@ -232,6 +314,7 @@ def test_native_layout_and_navigation(size, monkeypatch):
         tiles = app.body.winfo_children()
         assert len(tiles) == 2
         assert all(t.winfo_height() >= 40 for t in tiles)
+        assert all(f"{role}: setup" in app.status.get() for role in "ABC")
         app.open_category("Wi-Fi")
         app.turn_page(1)
         assert app.page == 1
@@ -239,6 +322,10 @@ def test_native_layout_and_navigation(size, monkeypatch):
         root.update()
         assert app.run_button.winfo_height() >= 35
         assert app.footer.winfo_y() + app.footer.winfo_height() <= size[1]
+        app.show_tool(BY_KEY["usb"])
+        root.update()
+        assert app.graph is None
+        assert app.run_button.cget("text") == "Connect"
         app.show_tool(BY_KEY["arcade"])
         root.update()
         assert len(app.body.winfo_children()) == 12

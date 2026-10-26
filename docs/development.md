@@ -4,12 +4,11 @@ SSH operation and optional ESP USB self-tests are documented in
 [SSH and USB testing](ssh-and-usb-testing.md). The new firmware addition must be flashed
 before the ESP can answer; physical deployment has not been verified here.
 
-The deployment target is now a Raspberry Pi as the only host, with one ESP,
-four physical buttons, two switches, and two 2.4 GHz antennas. Desktop commands
-below remain development conveniences. The next UI requirement is a Pi screen
-menu showing two large buttons at a time, with swipe and button scrolling;
-see [hardware and screen requirements](hardware-and-screen.md). Input wiring
-and mappings must be resolved before implementing the physical input adapter.
+The deployment target is a Raspberry Pi controlling three ESP nodes: A for
+Wi-Fi/BLE/nRF, B for CC1101/RFID and C for infrared. The native tablet app has
+two large menu choices per page and touch scrolling; see the
+[tablet guide](tablet-app.md). Physical button wiring and mappings still need
+to be resolved before implementing a GPIO input adapter.
 
 Start with the working website. You do not need Raspberry Pi hardware, a
 frontend build tool, or knowledge of every folder to make your first change.
@@ -48,6 +47,26 @@ Paths after the first item are relative to `src/pi_ot_probe/`.
 | HTTP/TLS observations | `collectors/http.py` |
 | SQLite tables and migrations | `database/schema.py`, `database/repository.py` |
 | JSON/CSV downloads | `reports/site.py` |
+| Native touchscreen widgets and navigation | `tablet/app.py` |
+| Readable results and device status | `tablet/presentation.py` |
+| Tablet jobs, cancellation, USB setup | `tablet/backend.py` |
+| Tablet menu names and hardware roles | `tablet/catalog.py` |
+| USB workers, reconnects, request ordering | `peripherals/manager.py` |
+| Stable USB port enumeration | `peripherals/ports.py` |
+| Current ESP firmware | `firmware/src/node_a.cpp`, `node_b.cpp`, `node_c.cpp` |
+
+For a tablet scan, `TabletApp.run_tool()` starts one background job through
+`TabletBackend.start()`. `request()` records the evidence cursor and submits a
+command against the identified USB session. Each `NodeWorker` owns its port;
+replies are correlated by role, session and request ID before becoming samples.
+Stop and command submission share a lock so cancelled work cannot restart a board.
+The UI consumes queued messages on Tk's main thread. Result formatting belongs in
+`presentation.py`; do not put USB I/O in widget callbacks.
+
+Run `pytest tests/test_peripherals.py tests/test_tablet.py tests/test_sentinel_firmware.py -q`
+for the three-node and tablet regressions. The firmware loop tests require g++ and
+ArduinoJson headers from a local PlatformIO node_a build. They use fake radio
+drivers to exercise deadline handling, not physical RF reception.
 
 ## Follow one button from click to result
 

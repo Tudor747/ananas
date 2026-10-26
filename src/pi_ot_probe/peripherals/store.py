@@ -24,6 +24,10 @@ class EvidenceStore:
             rows = db.execute("SELECT * FROM peripheral_events WHERE id>? ORDER BY id LIMIT ?", (after, limit)).fetchall()
         return [{**{k: r[k] for k in r.keys() if k != "data_json"}, "data": json.loads(r["data_json"])} for r in rows]
 
+    def latest_id(self):
+        with self.repository.connect() as db:
+            return db.execute("SELECT COALESCE(MAX(id), 0) FROM peripheral_events").fetchone()[0]
+
     def markdown(self, after=0, limit=1000):
         lines = ["# RF Sentinel peripheral evidence", "", "USB records are device reports, not independently verified hardware measurements.",
                  "Host receive times use UTC; device uptime is not a synchronized clock.", ""]

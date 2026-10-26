@@ -7,6 +7,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 import getpass
 import json
+import logging
 from pathlib import Path
 import queue
 import subprocess
@@ -19,11 +20,13 @@ from pi_ot_probe.collectors.nmap import find_nmap, parse_nmap_xml
 from pi_ot_probe.collectors.targets import validate_target
 from pi_ot_probe.collectors.wifi import discover_wifi
 from pi_ot_probe.database.repository import Repository
-from pi_ot_probe.peripherals.manager import NodeManager, load_config
+from pi_ot_probe.peripherals.manager import NodeManager, load_config, port_key
 from pi_ot_probe.peripherals.protocol import Command, NodeConfig
 from pi_ot_probe.peripherals.store import EvidenceStore
 from .catalog import BY_KEY
 from .diagnostics import dependencies
+
+logger = logging.getLogger(__name__)
 
 
 def summarize(action, records):
@@ -77,6 +80,7 @@ class TabletBackend:
         self.last_result = None
         self.job_id = 0
         self._local = threading.local()
+        self.command_lock = threading.Lock()
         self.manager.start()
 
     def emit(self, kind, **values):
@@ -112,6 +116,7 @@ class TabletBackend:
             except InterruptedError:
                 self.emit("cancelled", message="Stopped. Partial samples are retained in the evidence log.")
             except Exception as exc:
+                logger.exception("Tablet job %s (%s) failed", job_id, key)
                 self.emit("error", message=str(exc))
             finally:
                 self.busy = False
@@ -123,19 +128,20 @@ class TabletBackend:
         if self.cancelled.is_set() or self.closing.is_set():
             raise InterruptedError("Stopped")
 
-    def _cursor(self):
-        with self.store.repository.connect() as db:
-            return db.execute("SELECT COALESCE(MAX(id), 0) FROM peripheral_events").fetchone()[0]
-
     def request(self, node, command, args, purpose, duration=0):
         self._check_cancelled()
-        before = self._cursor()
+        before = self.store.latest_id()
         state = next(s for s in self.state() if s["node"] == node)
         if state["connection"] != "online":
             raise ValueError(f"ESP-{node}: {state.get('error') or state['connection']}. Use System > USB Setup if unconfigured.")
         session = state["session"]
-        request_id = self.manager.command(node, Command(command=command, args=args, authorized=True,
-                                                       operator=getpass.getuser()[:80], purpose=purpose[:200]))
+        # STOP and submission share a lock so cancelled work cannot restart a device.
+        with self.command_lock:
+            self._check_cancelled()
+            request_id = self.manager.command(
+                node, Command(command=command, args=args, authorized=True,
+                              operator=getpass.getuser()[:80], purpose=purpose[:200]),
+                expected_session=session)
         deadline = time.monotonic() + duration / 1000 + 10
         records = []
         while time.monotonic() < deadline:
@@ -158,6 +164,8 @@ class TabletBackend:
                 if command != "OBSERVE":
                     return payload
                 if event["kind"] == "event":
+                    if payload.get("sensor") != args["sensor"]:
+                        raise ValueError(f"ESP-{node} returned a different sensor for this observation")
                     if payload.get("complete"):
                         return records
                     records.append(payload)
@@ -217,9 +225,11 @@ class TabletBackend:
         if action == "dependencies":
             return {"checks": dependencies(self.config_path)}
         if action == "pair":
+            if options.get("forget"):
+                return self.unpair(options.get("role", "A"))
             return self.pair(options.get("role", "A"), options["port"])
         if action == "logs":
-            return {"events": self.store.events(after=max(0, self._cursor() - 100), limit=100)}
+            return {"events": self.store.events(after=max(0, self.store.latest_id() - 100), limit=100)}
         if action in {"overview", "about"}:
             return {"nodes": self.state(), "configuration": str(self.config_path.resolve()),
                     "configuration_error": self.config_error, "python": sys.version.split()[0],
@@ -263,6 +273,12 @@ class TabletBackend:
     def pair(self, role, port):
         if role not in {"A", "B", "C"}:
             raise ValueError("Choose role A, B or C")
+        if not port or not port.strip():
+            raise ValueError("Select a USB port first, then tap Connect.")
+        current = load_config(self.config_path) if self.config_path.exists() else []
+        if any(c.node != role and port_key(c.port) == port_key(port) for c in current):
+            raise ValueError("This USB port is already assigned to another ESP. Select its own port.")
+        self.emit("progress", message=f"Identifying ESP-{role}; USB connections are paused briefly...")
         self.manager.stop()
         try:
             self._check_cancelled()
@@ -272,24 +288,44 @@ class TabletBackend:
             if result.returncode:
                 raise ValueError((result.stdout + result.stderr).strip()[-600:])
             identified = NodeConfig.model_validate(json.loads(result.stdout))
-            current = load_config(self.config_path) if self.config_path.exists() else []
+            if identified.node != role or port_key(identified.port) != port_key(port):
+                raise ValueError("USB identity result does not match the selected role and port")
             current = [c for c in current if c.node != role] + [identified]
             for field in ("port", "device"):
-                if len({getattr(c, field) for c in current}) != len(current):
+                values = [port_key(c.port) if field == "port" else c.device for c in current]
+                if len(set(values)) != len(current):
                     raise ValueError(f"This {field} is already assigned to another role.")
             self._check_cancelled()
-            self.config_path.parent.mkdir(parents=True, exist_ok=True)
-            if self.config_path.exists():
-                self.config_path.with_suffix(".json.bak").write_bytes(self.config_path.read_bytes())
-            temporary = self.config_path.with_suffix(".json.tmp")
-            temporary.write_text(json.dumps([c.model_dump() for c in current], indent=2) + "\n", encoding="utf-8")
-            temporary.replace(self.config_path)
-            self.manager = self.manager_factory(current, self.store)
-            self.config_error = ""
+            self.save_configuration(current)
             return identified.model_dump()
         finally:
             if not self.closing.is_set():
                 self.manager.start()
+
+    def unpair(self, role):
+        """Forget a port assignment, retaining reports, USB evidence and other roles."""
+        current = load_config(self.config_path) if self.config_path.exists() else []
+        if role not in {c.node for c in current}:
+            raise ValueError(f"ESP-{role} has no saved setup")
+        self.manager.stop()
+        try:
+            self._check_cancelled()
+            self.save_configuration([c for c in current if c.node != role])
+            return {"node": role, "unconfigured": True}
+        finally:
+            if not self.closing.is_set():
+                self.manager.start()
+
+    def save_configuration(self, configs):
+        """Called with USB workers stopped, before reconnecting the saved roles."""
+        self.config_path.parent.mkdir(parents=True, exist_ok=True)
+        if self.config_path.exists():
+            self.config_path.with_suffix(".json.bak").write_bytes(self.config_path.read_bytes())
+        temporary = self.config_path.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps([c.model_dump() for c in configs], indent=2) + "\n", encoding="utf-8")
+        temporary.replace(self.config_path)
+        self.manager = self.manager_factory(configs, self.store)
+        self.config_error = ""
 
     def save_report(self, value):
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -298,15 +334,18 @@ class TabletBackend:
         return path
 
     def stop(self):
-        self.cancelled.set()
-        for state in self.state():
-            if state["connection"] == "online":
-                try:
-                    self.manager.command(state["node"], Command(command="STOP"))
-                except ValueError:
-                    pass
+        with self.command_lock:
+            self.cancelled.set()
+            for state in self.state():
+                if state["connection"] == "online":
+                    try:
+                        self.manager.command(state["node"], Command(command="STOP"))
+                    except ValueError:
+                        logger.debug("ESP-%s went offline before STOP", state["node"], exc_info=True)
 
     def close(self):
+        if self.closing.is_set():
+            return
         self.closing.set()
         self.stop()
         if self.thread:

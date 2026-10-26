@@ -1,6 +1,5 @@
 """USB failure isolation and provenance exercised without physical hardware."""
 import json
-import threading
 import time
 
 import pytest
@@ -39,6 +38,7 @@ class FakeSerial:
         self.wrong_identity = wrong_identity
         self.reject_observe = reject_observe
         self.drop = False
+        self.health = "ready"
 
     def write(self, raw):
         request = json.loads(raw)
@@ -47,7 +47,8 @@ class FakeSerial:
             return len(raw)
         self.seq += 1
         self.buffer.extend(wire(node=self.node, device="wrong" if self.wrong_identity else f"chip-{self.node}",
-                                seq=self.seq, session=request["session"], id=request["id"], command=request["command"]))
+                                seq=self.seq, session=request["session"], id=request["id"],
+                                command=request["command"], health=self.health))
         return len(raw)
 
     def read(self, count):
@@ -214,3 +215,77 @@ def test_replay_labels_and_validation(tmp_path):
     with pytest.raises(ValueError):
         import_replay(path, store)
     assert len(store.events()) == 1
+
+
+def test_reconnected_node_rejects_command_from_previous_session(tmp_path):
+    from pi_ot_probe.peripherals.manager import NodeWorker
+    worker = NodeWorker(config(), EvidenceStore(Repository(tmp_path / "db")))
+    worker.session = "new-session"
+    worker.update(connection="online")
+    with pytest.raises(ValueError, match="reconnected"):
+        worker.enqueue(Command(command="STATUS"), expected_session="old-session")
+    assert not worker.queue
+    worker.stop()
+    with pytest.raises(ValueError, match="online"):
+        worker.enqueue(Command(command="STATUS"))
+
+
+def test_serial_close_failure_does_not_kill_reconnect_worker(tmp_path):
+    class BrokenClose(FakeSerial):
+        def close(self):
+            super().close()
+            raise OSError("USB driver close failed")
+
+    first, replacement = BrokenClose(), FakeSerial()
+    attempts = []
+    def open_port(_):
+        port = replacement if attempts else first
+        attempts.append(port)
+        return port
+
+    manager = NodeManager([config()], EvidenceStore(Repository(tmp_path / "db")), open_port)
+    manager.start()
+    try:
+        wait_until(lambda: manager.state()[0]["connection"] == "online")
+        manager.start()
+        assert len(attempts) == 1
+        first.closed = True
+        wait_until(lambda: len(attempts) == 2 and manager.state()[0]["connection"] == "online", timeout=4)
+    finally:
+        manager.stop()
+
+
+def test_idle_heartbeats_keep_connections_alive_without_repeated_evidence(tmp_path):
+    store = EvidenceStore(Repository(tmp_path / "db"))
+    port = FakeSerial()
+    manager = NodeManager([config()], store, lambda _: port)
+    manager.start()
+    try:
+        wait_until(lambda: manager.state()[0].get("last_seq", 0) >= 4, timeout=5)
+        replies = lambda: [e for e in store.events() if e["kind"] == "reply" and e["data"]["command"] == "STATUS"]
+        assert len(replies()) == 1
+        port.health = "error"
+        wait_until(lambda: manager.state()[0]["health"] == "error")
+        assert len(replies()) == 2
+        request = manager.command("A", Command(command="STATUS"))
+        wait_until(lambda: any(e["data"]["id"] == request for e in replies()))
+        assert len(replies()) == 3
+    finally:
+        manager.stop()
+
+
+def test_aliases_for_same_usb_port_cannot_be_assigned_twice(tmp_path):
+    endpoint = tmp_path / "ttyUSB0"
+    endpoint.touch()
+    alias = tmp_path / "stable-name"
+    try:
+        alias.symlink_to(endpoint)
+    except OSError:
+        pytest.skip("Creating symlinks is not permitted")
+    path = tmp_path / "nodes.json"
+    path.write_text(json.dumps([
+        {"node": "A", "port": str(endpoint), "device": "a"},
+        {"node": "B", "port": str(alias), "device": "b"},
+    ]))
+    with pytest.raises(ValueError, match="duplicate.*port"):
+        load_config(path)

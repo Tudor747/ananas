@@ -1,15 +1,15 @@
 """Touch-first Tk window. All device work is delegated to the backend worker."""
 from __future__ import annotations
 
-import asyncio
-import json
 import queue
 import random
 import threading
 import tkinter as tk
 
-from pi_ot_probe.collectors.interfaces import discover_local_networks
-from .catalog import CATEGORIES, TOOLS, category_tools
+from pi_ot_probe.peripherals.manager import port_key
+from .catalog import BY_KEY, CATEGORIES, NODE_NAMES, TOOLS, category_tools
+from .diagnostics import discover_choices
+from .presentation import connection_summary, describe_node, format_result, pretty_record
 
 BG = "#0c1420"
 PANEL = "#172638"
@@ -18,48 +18,8 @@ MUTED = "#a4b7cf"
 ACCENT = "#4ee3b3"
 ERROR = "#ffb5a5"
 
-
-def pretty_record(row):
-    if "ssid" in row:
-        return f"{row.get('ssid') or '(hidden SSID)'}\n  {row.get('rssi_dbm', '?')} dBm · channel {row.get('channel', '?')} · {row.get('bssid', '')}"
-    if "address" in row and "rssi_dbm" in row:
-        return f"{row.get('name') or 'Unnamed BLE device'}\n  {row['rssi_dbm']} dBm · {row['address']}"
-    if "nrf1_carrier" in row:
-        return f"nRF channel {row.get('channel')} · radio 1: {bool(row['nrf1_carrier'])} · radio 2: {bool(row.get('nrf2_carrier'))}"
-    return json.dumps(row, ensure_ascii=False, default=str)
-
-
-def format_result(result):
-    if "checks" in result:
-        return "\n\n".join(f"{'OK' if c['ok'] else 'MISSING'} · {c['name']}\n{c['detail']}" for c in result["checks"])
-    if "records" in result:
-        return "\n\n".join(pretty_record(r) for r in result["records"]) or "Observation completed. No samples were reported."
-    if "assets" in result:
-        return (f"{result['target']} · {len(result['assets'])} hosts\n\n" +
-                "\n\n".join(f"{a['ip']} · {a.get('hostname') or 'unnamed'}\n{a.get('mac') or 'MAC not observed'}" for a in result["assets"]))
-    if "snapshots" in result:
-        return "\n\n".join(f"Snapshot {i + 1}\n" + ("\n".join(pretty_record(r) for r in rows) or "No observations")
-                             for i, rows in enumerate(result["snapshots"]))
-    if "tx_completed" in result:
-        return (f"Transmit completed: {result['tx_completed']}\nMatching packet received: {result.get('matching_packet_received')}\n"
-                "Transmission alone does not prove reception.")
-    if "access_points_per_channel" in result:
-        return "Observed access points by channel\n\n" + ("\n".join(
-            f"Channel {channel}: {count} AP(s)" for channel, count in result["access_points_per_channel"].items())
-            or "No access points observed") + "\n\n" + result["note"]
-    if "devices_per_rssi_bin_dbm" in result:
-        return "Bluetooth signal distribution\n\n" + ("\n".join(
-            f"{low} to {int(low) + 9} dBm: {count} device(s)"
-            for low, count in result["devices_per_rssi_bin_dbm"].items()) or "No BLE devices observed")
-    if "sampled_channels" in result:
-        return "\n".join(f"Channel {r['channel']}: {r['hit_fraction']:.0%} hits ({r['samples']} samples per radio)"
-                         for r in result["sampled_channels"]) + "\n\n" + result["note"]
-    if "baseline_created" in result:
-        return (("First snapshot saved." if result["baseline_created"] else "Compared with the previous snapshot.") +
-                f"\nObserved now: {len(result['currently_observed'])}\n"
-                f"Newly observed: {', '.join(result['newly_observed']) or 'none'}\n"
-                f"Not observed this time: {', '.join(result['not_observed_this_time']) or 'none'}\n\n" + result["note"])
-    return json.dumps(result, indent=2, ensure_ascii=False, default=str)
+GRAPH_ACTIONS = {"wifi", "radar", "channels", "sentinel", "ble", "bt_analyzer",
+                 "bt_spectrum", "nrf", "scope", "sweep", "advisor", "coex"}
 
 
 class TabletApp:
@@ -91,8 +51,13 @@ class TabletApp:
         self.generation = 0
         self.active_job = None
         self.result_widget = None
+        self.result_text = None
         self.graph = None
         self.run_button = None
+        self.forget_button = None
+        self.refreshing = False
+        self.choice_errors = []
+        self.node_notice = tk.StringVar(root)
         self.status = tk.StringVar(root, "Connecting to configured nodes…")
         self.notice = tk.StringVar(root, "")
 
@@ -106,6 +71,8 @@ class TabletApp:
         self.status_label = tk.Label(root, textvariable=self.status, bg=BG, fg=ACCENT,
                                      font=("DejaVu Sans", max(9, self.font_size - 2)), anchor="w")
         self.status_label.pack(fill="x", padx=8)
+        self.status_label.configure(cursor="hand2")
+        self.status_label.bind("<ButtonRelease-1>", lambda _: self.open_devices())
         self.footer = tk.Frame(root, bg=BG)
         self.footer.pack(side="bottom", fill="x", padx=4, pady=3)
         self.body = tk.Frame(root, bg=BG)
@@ -130,12 +97,19 @@ class TabletApp:
             self.body.columnconfigure(index, weight=0, uniform="")
         self.active_job = None
         self.result_widget = self.graph = self.run_button = None
+        self.forget_button = None
+        self.result_text = None
 
     def home(self):
         if self.backend.busy:
             self.backend.stop()
         self.category, self.page, self.tool = None, 0, None
         self.show_menu()
+
+    def open_devices(self):
+        self.category, self.page = "System", 0
+        key = "usb" if all(s["connection"] == "unconfigured" for s in self.backend.state()) else "slave"
+        self.show_tool(BY_KEY[key])
 
     def back(self):
         if self.backend.busy:
@@ -222,6 +196,8 @@ class TabletApp:
         return label
 
     def show_tool(self, tool):
+        if self.backend.busy and tool != self.tool:
+            self.backend.stop()
         self.tool = tool
         self.reset_body()
         self.title.configure(text=tool.title)
@@ -236,6 +212,11 @@ class TabletApp:
             self.label(content, tool.unavailable, ERROR)
             self.button(self.footer, "Back to tools", self.back).pack(fill="x")
             return
+        if tool.node:
+            self.label(content, variable=self.node_notice, color=MUTED)
+            self.button(content, "USB Setup", lambda: self.show_tool(BY_KEY["usb"])).pack(fill="x", pady=4)
+        if tool.action == "overview":
+            self.button(content, "USB Setup", lambda: self.show_tool(BY_KEY["usb"])).pack(fill="x", pady=4)
         if tool.node or tool.action in {"ip", "pi_wifi"}:
             permission = tk.Checkbutton(content, text="I have permission for this test", variable=self.authorized,
                                         bg=BG, fg=TEXT, selectcolor=PANEL, activebackground=BG,
@@ -252,53 +233,73 @@ class TabletApp:
                 self.label(content, "No local private network found yet. Tap Refresh after connecting.", ERROR)
             self.button(content, "Refresh networks", self.refresh_choices).pack(fill="x", pady=4)
         if tool.action == "pair":
-            self.label(content, "Close screen and the web server first. Choose the role flashed on the connected ESP.")
+            self.label(content, "Close serial monitors and the web server. Choose the role flashed on this ESP. Connecting pauses all USB nodes briefly.")
+            if getattr(self.backend, "config_error", ""):
+                self.label(content, f"Configuration error: {self.backend.config_error}", ERROR)
             roles = tk.Frame(content, bg=BG)
             roles.pack(fill="x")
             for role in "ABC":
                 tk.Radiobutton(roles, text=role, variable=self.role, value=role, indicatoron=False,
-                               bg=PANEL, fg=TEXT, selectcolor="#29644f", pady=10).pack(side="left", expand=True, fill="x")
+                               command=lambda: self.show_tool(tool), bg=PANEL, fg=TEXT,
+                               selectcolor="#29644f", pady=10).pack(side="left", expand=True, fill="x")
+            self.label(content, f"ESP-{self.role.get()}: {NODE_NAMES[self.role.get()]}")
+            assigned = {port_key(s["port"]): s["node"] for s in self.backend.state() if s.get("port")}
+            available = [p["port"] for p in self.ports if assigned.get(port_key(p["port"])) in {None, self.role.get()}]
+            if self.selected_port.get() not in available:
+                self.selected_port.set(available[0] if available else "")
             for port in self.ports:
-                tk.Radiobutton(content, text=f"{port['port']}\n{port['description']}", variable=self.selected_port,
+                owner = assigned.get(port_key(port["port"]))
+                suffix = f" · assigned to {owner}" if owner else ""
+                tk.Radiobutton(content, text=f"{port['port']}\n{port['description']}{suffix}", variable=self.selected_port,
                                value=port["port"], bg=BG, fg=TEXT, selectcolor=PANEL,
+                               state="normal" if port["port"] in available else "disabled",
                                anchor="w", justify="left", pady=10, wraplength=230).pack(fill="x")
             if not self.ports:
                 self.label(content, "No serial ports detected. Connect the ESP and refresh.", ERROR)
             self.button(content, "Refresh USB ports", self.refresh_choices).pack(fill="x", pady=4)
+            if self.role.get() in assigned.values():
+                self.forget_button = self.button(content, f"Forget ESP-{self.role.get()} setup",
+                                                 lambda: self.run_tool(forget=True))
+                self.forget_button.pack(fill="x", pady=4)
+                self.label(content, "Frees this role's USB port. Keeps reports and the other boards' setup.", MUTED)
+        if tool.action in {"pair", "ip"} and self.choice_errors:
+            self.label(content, "\n".join(self.choice_errors), ERROR)
         self.label(content, variable=self.notice, color=ACCENT)
-        self.graph = tk.Canvas(content, bg=PANEL, height=135, highlightthickness=0)
-        self.graph.pack(fill="x", pady=3)
-        self.graph.bind("<Configure>", lambda _: self.draw_graph())
-        self.bind_scroll(self.graph)
+        if tool.action in GRAPH_ACTIONS:
+            self.graph = tk.Canvas(content, bg=PANEL, height=135, highlightthickness=0)
+            self.graph.pack(fill="x", pady=3)
+            self.graph.bind("<Configure>", lambda _: self.draw_graph())
+            self.bind_scroll(self.graph)
         self.result_widget = tk.Text(content, height=14, bg=PANEL, fg=TEXT, wrap="word", relief="flat",
                                      padx=8, pady=8, state="disabled", insertbackground=TEXT)
         self.result_widget.pack(fill="both", expand=True, pady=4)
         # Dragging a result scrolls its own content. The outer scrollbar reaches the form.
         self.result_widget.bind("<ButtonPress-1>", lambda e: self.result_widget.scan_mark(e.x, e.y))
         self.result_widget.bind("<B1-Motion>", lambda e: self.result_widget.scan_dragto(e.x, e.y))
-        self.run_button = self.button(self.footer, "Run", self.run_tool, primary=True)
+        self.run_button = self.button(self.footer, "Connect" if tool.action == "pair" else "Run", self.run_tool, primary=True)
         self.run_button.pack(side="left", fill="x", expand=True, padx=2)
-        self.button(self.footer, "Stop", self.backend.stop).pack(side="left", fill="x", expand=True, padx=2)
+        self.button(self.footer, "Stop all", self.stop_work).pack(side="left", fill="x", expand=True, padx=2)
         if tool.action in {"about", "overview", "dependencies", "logs"} and not self.backend.busy:
             self.run_tool()
 
     def refresh_choices(self):
+        if self.refreshing:
+            return
+        self.refreshing = True
         def work():
-            try:
-                from serial.tools.list_ports import comports
-                ports = [{"port": p.device, "description": p.description} for p in comports()]
-                networks = [n.to_dict() for n in asyncio.run(discover_local_networks())]
-                self.backend.emit("choices", ports=ports, networks=networks)
-            except Exception as exc:
-                self.backend.emit("choice_error", message=str(exc))
+            self.backend.emit("choices", **discover_choices())
         threading.Thread(target=work, daemon=True).start()
 
-    def run_tool(self):
+    def stop_work(self):
+        self.backend.stop()
+        self.notice.set("Stopping all connected ESPs...")
+
+    def run_tool(self, **options):
         if not self.tool:
             return
         try:
             self.backend.start(self.tool.key, authorized=self.authorized.get(), target=self.target.get(),
-                               port=self.selected_port.get(), role=self.role.get())
+                               port=self.selected_port.get(), role=self.role.get(), **options)
             self.active_job = self.backend.job_id
             self.samples = []
             self.notice.set("Running…")
@@ -308,7 +309,8 @@ class TabletApp:
             self.notice.set(str(exc))
 
     def set_result(self, text):
-        if self.result_widget:
+        if self.result_widget and text != self.result_text:
+            self.result_text = text
             self.result_widget.configure(state="normal")
             self.result_widget.delete("1.0", "end")
             self.result_widget.insert("end", text)
@@ -374,12 +376,13 @@ class TabletApp:
         if self.closing:
             return
         states = self.backend.state()
-        a = next((s for s in states if s["node"] == "A"), {})
-        if a.get("connection") == "online":
-            self.status.set(f"A: USB online · hardware {a.get('health', 'unknown')}")
-            self.status_label.configure(fg=ERROR if a.get("health") == "error" else ACCENT)
-        else:
-            self.status.set(f"A: {a.get('connection', 'unconfigured')} · System > USB Setup")
+        self.status.set(connection_summary(states))
+        trouble = any(s.get("health") == "error" or s["connection"] == "offline" for s in states)
+        self.status_label.configure(fg=ERROR if trouble else ACCENT)
+        if self.tool and self.tool.node:
+            state = next((s for s in states if s["node"] == self.tool.node),
+                         {"node": self.tool.node, "connection": "unconfigured"})
+            self.node_notice.set(describe_node(state))
         changed_samples = False
         for _ in range(200):
             try:
@@ -397,27 +400,45 @@ class TabletApp:
                 changed_samples = False
                 self.notice.set(f"Complete · saved to {message['path']}")
                 result = message["result"]
+                if self.tool and self.tool.action == "pair":
+                    # Rebuild assignments before showing the result so freed ports are selectable.
+                    self.show_tool(self.tool)
+                    self.notice.set(f"Complete · saved to {message['path']}")
                 if self.tool and self.tool.action == "about":
                     result = {**result, "screen_pixels": [self.root.winfo_screenwidth(), self.root.winfo_screenheight()],
                               "window_pixels": [self.root.winfo_width(), self.root.winfo_height()],
                               "available_tools": sum(t.action is not None for t in TOOLS)}
                 self.set_result(format_result(result))
                 self.draw_graph()
-            elif kind in {"error", "cancelled", "progress", "choice_error"}:
+            elif kind in {"error", "cancelled", "progress"}:
                 self.notice.set(message["message"])
             elif kind == "choices":
+                self.refreshing = False
+                self.choice_errors = message.get("errors", [])
                 self.networks, self.ports = message["networks"], message["ports"]
-                if self.networks and self.target.get() not in {n["safe_target"] for n in self.networks}:
-                    self.target.set(self.networks[0]["safe_target"])
-                if self.ports and self.selected_port.get() not in {p["port"] for p in self.ports}:
-                    self.selected_port.set(self.ports[0]["port"])
+                if self.target.get() not in {n["safe_target"] for n in self.networks}:
+                    self.target.set(self.networks[0]["safe_target"] if self.networks else "")
+                if self.selected_port.get() not in {p["port"] for p in self.ports}:
+                    self.selected_port.set(self.ports[0]["port"] if self.ports else "")
                 if self.tool and self.tool.action in {"pair", "ip"} and not self.backend.busy:
                     self.show_tool(self.tool)
         if changed_samples:
             self.set_result("\n\n".join(pretty_record(r) for r in self.samples[-30:]))
             self.draw_graph()
+        if self.tool and self.tool.action == "overview" and not self.backend.busy:
+            self.set_result(format_result({"nodes": states,
+                                           "configuration_error": getattr(self.backend, "config_error", "")}))
         if self.run_button:
-            self.run_button.configure(state="disabled" if self.backend.busy else "normal")
+            available = not self.backend.busy
+            if self.tool.node:
+                available &= any(s["node"] == self.tool.node and s["connection"] == "online" for s in states)
+            if self.tool.action == "pair":
+                available &= bool(self.selected_port.get())
+            if self.tool.action == "ip":
+                available &= bool(self.target.get())
+            self.run_button.configure(state="normal" if available else "disabled")
+        if self.forget_button:
+            self.forget_button.configure(state="disabled" if self.backend.busy else "normal")
         self.root.after(150, self.poll)
 
     def memory_game(self):

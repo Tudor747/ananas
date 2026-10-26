@@ -15,9 +15,8 @@ def main():
     parser.add_argument("--list", action="store_true")
     args = parser.parse_args()
     if args.list:
-        from serial.tools.list_ports import comports
-        print(json.dumps([{"port": p.device, "description": p.description,
-                           "usb_serial": p.serial_number} for p in comports()], indent=2))
+        from .ports import serial_ports
+        print(json.dumps(serial_ports(), indent=2))
         return 0
     if not args.port or not args.node:
         parser.error("use --list, or --port and --node")

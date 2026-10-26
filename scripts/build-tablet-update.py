@@ -1,4 +1,4 @@
-"""Package only the native app update; exclude data, firmware binaries and venvs."""
+"""Package tablet updates and node A source; exclude data, firmware binaries and venvs."""
 from pathlib import Path
 import tarfile
 
@@ -8,11 +8,13 @@ def main():
     paths = [root / name for name in (
         "pyproject.toml", "run-tablet.sh", "scripts/setup-tablet.sh",
         "scripts/install-tablet-desktop.py", "scripts/build-tablet-update.py",
-        "src/pi_ot_probe/peripherals/manager.py", "docs/tablet-app.md",
+        "docs/tablet-app.md",
         "README.md", "docs/usage.md", "BWifiKiller/README.md",
-        "tests/test_tablet.py", "tests/test_peripherals.py",
+        "tests/test_tablet.py", "tests/test_peripherals.py", "tests/test_sentinel_firmware.py",
+        "firmware/src/node_a.cpp", "docs/development.md", "docs/sentinel-integration.md",
     )]
     paths.extend(sorted((root / "src/pi_ot_probe/tablet").glob("*.py")))
+    paths.extend(sorted((root / "src/pi_ot_probe/peripherals").glob("*.py")))
     destination = root / "dist/rf-sentinel-tablet-update.tar.gz"
     destination.parent.mkdir(exist_ok=True)
     with tarfile.open(destination, "w:gz") as archive:

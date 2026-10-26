@@ -27,8 +27,12 @@ void hardwareStop() {
     if (bleScan) bleScan->stop();
     active = false;
 }
-static void finish() {
-    hardwareStop(); auto p = Sentinel::event(sensor.c_str()); p["complete"] = true; Sentinel::emit();
+static void finish(const char* error = nullptr) {
+    hardwareStop();
+    auto result = Sentinel::event(sensor.c_str());
+    result["complete"] = true;
+    if (error) result["error"] = error;
+    Sentinel::emit();
 }
 bool hardwareCommand(const char* cmd, JsonObjectConst args, JsonObject result) {
     if (!strcmp(cmd, "TRANSMIT")) {
@@ -74,12 +78,14 @@ bool hardwareCommand(const char* cmd, JsonObjectConst args, JsonObject result) {
         WiFi.mode(WIFI_STA); wifiResultIndex = 0;
         // Passive asynchronous scan, no association and no probe requests.
         int scan = WiFi.scanNetworks(true, true, true, 120);
-        if (scan == WIFI_SCAN_FAILED) { result["error"] = "Wi-Fi scan start failed"; return true; }
+        if (scan == WIFI_SCAN_FAILED) {
+            hardwareStop(); result["error"] = "Wi-Fi scan start failed"; return true;
+        }
     } else {
         if (!bleInitialized) { BLEDevice::init(""); bleInitialized = true; bleScan = BLEDevice::getScan(); }
         bleScan->clearResults(); bleScan->setActiveScan(false); bleFinished = false;
         if (!bleScan->start((duration + 999) / 1000, [](BLEScanResults){bleFinished = true;}, false)) {
-            result["error"] = "BLE scan start failed"; return true;
+            hardwareStop(); result["error"] = "BLE scan start failed"; return true;
         }
     }
     sensor = chosen; active = true; until = millis() + duration;
@@ -88,16 +94,25 @@ bool hardwareCommand(const char* cmd, JsonObjectConst args, JsonObject result) {
 }
 void hardwarePoll() {
     if (!active) return;
+    bool expired = (int32_t)(millis() - until) >= 0;
     if (sensor == "wifi") {
         int count = WiFi.scanComplete();
+        if (count == WIFI_SCAN_FAILED) { finish("Wi-Fi scan failed"); return; }
         if (count >= 0) {
             if (wifiResultIndex < count && wifiResultIndex < 30) {
                 int i = wifiResultIndex++; auto p = Sentinel::event("wifi");
                 p["ssid"] = WiFi.SSID(i).substring(0,32); p["bssid"] = WiFi.BSSIDstr(i);
                 p["rssi_dbm"] = WiFi.RSSI(i); p["channel"] = WiFi.channel(i); Sentinel::emit();
             } else finish();
+        } else if (expired) {
+            finish("Wi-Fi scan did not finish within the observation window");
         }
-    } else if (sensor == "ble" && bleFinished) {
+        // Once scanning ends, drain the bounded result set even at the deadline.
+        return;
+    } else if (sensor == "ble" && (bleFinished || expired)) {
+        // The BLE callback can arrive after our millisecond deadline. Stop reception
+        // before reading its cached results instead of reporting an empty success.
+        hardwareStop();
         BLEScanResults results = bleScan->getResults();
         // Cap the result batch and do not retain advertisement payloads.
         for (int i = 0; i < results.getCount() && i < 20; ++i) {
@@ -105,7 +120,9 @@ void hardwarePoll() {
             p["address"] = device.getAddress().toString(); p["rssi_dbm"] = device.getRSSI();
             p["name"] = device.getName().substr(0,40); Sentinel::emit();
         }
-        finish();
+        auto completed = Sentinel::event("ble");
+        completed["complete"] = true;
+        Sentinel::emit();
     } else if (sensor == "nrf" && millis() - lastSample >= 250) {
         lastSample = millis(); auto p = Sentinel::event("nrf");
         p["channel"] = channel; p["nrf1_carrier"] = radio1.testRPD(); p["nrf2_carrier"] = radio2.testRPD();

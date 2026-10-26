@@ -118,6 +118,12 @@ With no configuration, the app still opens and shows all nodes as unconfigured.
 Run a single Uvicorn worker: several workers must not compete for the same ports.
 Node IDs are local allowlist checks, not cryptographic device authentication.
 
+The native tablet's USB Setup picker also prefers stable Linux names and checks
+for aliases of a port already assigned to another node. See the
+[three-board tablet workflow](tablet-app.md#working-with-all-three-boards).
+Routine unchanged background STATUS records are suppressed to limit idle
+database growth; operator STATUS requests, health changes and failures are retained.
+
 ## Screen operation
 
 Open `/console`. It presents two module buttons per page, vertical swipe paging,
