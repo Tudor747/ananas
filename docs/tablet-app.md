@@ -52,9 +52,63 @@ the right scrollbar or drag the descriptions; drag inside results to scroll
 the results. **Stop all** cancels the current job and sends STOP to every connected
 ESP. Home/Back also stop active work.
 The X button closes the app and stops its devices. Escape leaves fullscreen;
-F11 toggles it. ESP-A can also act as a five-button USB controller (see below).
+F11 toggles it. The Pi's five GPIO buttons can control the same highlighted
+selection; touchscreen and keyboard input remain available.
 
-## Five-button controller on ESP-A
+## Raspberry Pi 5 GPIO navigation
+
+The handoff's GPIO mapping is in `GPIOButtons.PINS` in
+[`src/pi_ot_probe/tablet/gpio_buttons.py`](../src/pi_ot_probe/tablet/gpio_buttons.py).
+These are **BCM GPIO numbers**, not physical header positions:
+
+| Button | BCM GPIO | Action |
+| --- | --- | --- |
+| LEFT | 5 | Previous menu page; parent menu on the first page; back from a tool |
+| UP | 6 | Previous item on the page, or previous tool control |
+| DOWN | 13 | Next item on the page, or next tool control |
+| RIGHT | 26 | Next menu page |
+| OK / SELECT | 19 | Activate the highlighted item or control |
+
+Each momentary button connects its GPIO to common ground. Internal pull-ups are
+enabled. GPIO 16 belongs to the planned ON/OFF switch and is **not opened or used**.
+No ESP firmware or `BWifiKiller` changes are needed for these Pi buttons.
+
+UP/DOWN stop at the first/last menu item; LEFT/RIGHT change pages. Single-item
+pages keep a valid highlight. In a tool, use UP/DOWN and OK to toggle permission,
+select a USB role/port, Run, or Stop all. Select the result box with OK to read it;
+UP/DOWN then scroll the output and LEFT/OK leave result-reading mode. The next
+LEFT returns from the tool. Entering a new page selects its first item; tool
+screens initially highlight the permission checkbox when present.
+
+The driver samples on Tk's event loop every 30 ms and requires a stable input for
+60 ms. Each press fires once; holding a button does not repeat. A button already
+held at startup must be released and pressed again. One cancellable timer owns
+polling; shutdown, window destruction, read errors, and partial initialization
+release opened buttons. A GPIO setup failure is logged and leaves touch/keyboard
+usable. Linux launches try GPIO automatically; Windows/macOS previews do not.
+
+The Pi environment described in the handoff already has these packages:
+
+```bash
+sudo apt install python3-gpiozero python3-lgpio
+```
+
+Ensure `.venv-pi/pyvenv.cfg` contains `include-system-site-packages = true`, so
+the app can import the Debian packages. The driver defaults `GPIOZERO_PIN_FACTORY`
+to `lgpio` if it is not already set, including launches from the desktop autostart
+entry. Existing startup scripts and desktop entries are unchanged. Launch normally:
+
+```bash
+cd /home/pi1/Desktop/ananas
+bash run-tablet.sh
+```
+
+The handoff reports that the earlier Pi version worked after reboot; this local
+integration was checked with simulated GPIO and desktop Tk tests, not on a Pi.
+On the actual device, check every direction, page boundaries, a single-item page,
+permission/Run/Stop, touch input, closing/reopening, and startup after reboot.
+
+## Five-button controller on ESP-A (older optional input)
 
 Change the button GPIO numbers in
 [`BWifiKiller/include/app_config.h`](../BWifiKiller/include/app_config.h).

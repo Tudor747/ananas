@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import queue
+import logging
 import random
+import sys
 import threading
 import tkinter as tk
 
@@ -10,6 +12,7 @@ from pi_ot_probe.peripherals.manager import port_key
 from .catalog import BY_KEY, CATEGORIES, NODE_NAMES, TOOLS, category_tools
 from .diagnostics import discover_choices
 from .controller import Controller
+from .gpio_buttons import GPIOButtons
 from .presentation import connection_summary, describe_node, format_result, pretty_record
 
 BG = "#0c1420"
@@ -18,14 +21,17 @@ TEXT = "#eef6ff"
 MUTED = "#a4b7cf"
 ACCENT = "#4ee3b3"
 ERROR = "#ffb5a5"
+logger = logging.getLogger(__name__)
 
 GRAPH_ACTIONS = {"wifi", "radar", "channels", "sentinel", "ble", "bt_analyzer",
                  "bt_spectrum", "nrf", "scope", "sweep", "advisor", "coex"}
 
 
 class TabletApp:
-    def __init__(self, root, backend, fullscreen=True, size=None):
+    def __init__(self, root, backend, fullscreen=True, size=None, enable_gpio=None):
         self.root, self.backend = root, backend
+        self.gpio_buttons = None
+        self._menu_refresh_id = None
         root.title("RF Sentinel · Tablet")
         root.configure(bg=BG)
         width, height = size or (root.winfo_screenwidth(), root.winfo_screenheight())
@@ -88,6 +94,35 @@ class TabletApp:
         self.home()
         self.refresh_choices()
         self.poll()
+        use_gpio = sys.platform == "linux" if enable_gpio is None else enable_gpio
+        if use_gpio:
+            self.start_gpio()
+
+    def start_gpio(self):
+        if self.closing or self.gpio_buttons is not None:
+            return
+        try:
+            self.gpio_buttons = GPIOButtons(self.root, self.gpio_navigate)
+            logger.info("GPIO navigation buttons activated")
+        except Exception as exc:
+            logger.warning("GPIO initialization failed; keyboard/touch remain available: %s", exc)
+
+    def gpio_navigate(self, direction):
+        if not self.closing:
+            self.controller.navigate_gpio(direction)
+
+    def close_gpio(self):
+        if self.gpio_buttons is not None:
+            try:
+                self.gpio_buttons.close()
+            except Exception:
+                logger.exception("GPIO close failed")
+            self.gpio_buttons = None
+
+    def refresh_selection(self):
+        self._menu_refresh_id = None
+        if not self.closing:
+            self.controller.refresh()
 
     def button(self, parent, text, command, primary=False, **kwargs):
         return tk.Button(parent, text=text, command=command, bg=ACCENT if primary else PANEL,
@@ -109,7 +144,9 @@ class TabletApp:
         self.forget_button = None
         self.result_text = None
         self.scroll_canvas = None
-        self.root.after_idle(self.controller.refresh)
+        if self._menu_refresh_id is not None:
+            self.root.after_cancel(self._menu_refresh_id)
+        self._menu_refresh_id = self.root.after_idle(self.refresh_selection)
 
     def home(self):
         if self.backend.busy:
@@ -498,6 +535,10 @@ class TabletApp:
         if self.closing:
             return
         self.closing = True
+        self.close_gpio()
+        if self._menu_refresh_id is not None:
+            self.root.after_cancel(self._menu_refresh_id)
+            self._menu_refresh_id = None
         self.status.set("Stopping devices…")
         finished = threading.Event()
 

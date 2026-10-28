@@ -1,0 +1,333 @@
+"""Pi handoff regressions: simulated GPIO and the real Tk menu, without physical pins."""
+import gc
+import queue
+from types import SimpleNamespace
+
+import pytest
+
+from pi_ot_probe.tablet.gpio_buttons import GPIOButtons
+
+
+class Root:
+    def __init__(self):
+        self.timers = {}
+        self.destroy_callback = None
+        self.exists = True
+        self.count = 0
+
+    def bind(self, event, callback, add):
+        assert event == "<Destroy>" and add == "+"
+        self.destroy_callback = callback
+        return "destroy-binding"
+
+    def unbind(self, event, binding):
+        self.destroy_callback = None
+
+    def winfo_exists(self):
+        return self.exists
+
+    def after(self, delay, callback):
+        assert delay == 30
+        self.count += 1
+        self.timers[self.count] = callback
+        return self.count
+
+    def after_cancel(self, token):
+        self.timers.pop(token, None)
+
+    def tick(self):
+        assert len(self.timers) == 1
+        token, callback = next(iter(self.timers.items()))
+        del self.timers[token]
+        callback()
+
+
+class Button:
+    def __init__(self, pin, pull_up, bounce_time):
+        assert pull_up is True and bounce_time == .06
+        self.pin = pin
+        self.is_pressed = False
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+
+@pytest.fixture
+def gpio():
+    root, actions, now = Root(), [], [0.0]
+    driver = GPIOButtons(root, actions.append, button_factory=Button, clock=lambda: now[0])
+    yield driver, root, actions, now
+    driver.close()
+
+
+def test_exact_pin_mapping_and_no_power_switch(gpio):
+    driver, _, _, _ = gpio
+    assert {name: b.pin for name, b in driver.buttons.items()} == {
+        "left": 5, "up": 6, "down": 13, "right": 26, "ok": 19}
+    assert all(b.pin != 16 for b in driver.buttons.values())
+
+
+@pytest.mark.parametrize("name", ["left", "up", "down", "right", "ok"])
+def test_polled_values_are_debounced_and_held_press_is_not_repeated(gpio, name):
+    driver, root, actions, now = gpio
+    button = driver.buttons[name]
+    button.is_pressed = True
+    root.tick()
+    now[0] = .03
+    button.is_pressed = False
+    root.tick()
+    now[0] = .04
+    button.is_pressed = True
+    root.tick()
+    now[0] = .08
+    root.tick()
+    assert not actions
+    now[0] = .11
+    root.tick()
+    now[0] = 2
+    root.tick()
+    assert actions == [name]
+    button.is_pressed = False
+    root.tick()
+    now[0] = 2.07
+    root.tick()
+    button.is_pressed = True
+    root.tick()
+    now[0] = 2.14
+    root.tick()
+    assert actions == [name, name]
+
+
+def test_held_at_start_waits_for_release():
+    def held(*args, **kwargs):
+        button = Button(*args, **kwargs)
+        button.is_pressed = True
+        return button
+    root, actions, now = Root(), [], [0.0]
+    driver = GPIOButtons(root, actions.append, button_factory=held, clock=lambda: now[0])
+    try:
+        now[0] = 1
+        root.tick()
+        assert actions == []
+        driver.buttons["ok"].is_pressed = False
+        root.tick()
+        now[0] = 1.07
+        root.tick()
+        driver.buttons["ok"].is_pressed = True
+        root.tick()
+        now[0] = 1.14
+        root.tick()
+        assert actions == ["ok"]
+    finally:
+        driver.close()
+
+
+def test_only_one_poll_chain_and_close_is_idempotent(gpio):
+    driver, root, actions, _ = gpio
+    for _ in range(5):
+        driver.poll()
+    assert len(root.timers) == 1
+    queued = next(iter(root.timers.values()))
+    driver.close()
+    driver.close()
+    queued()  # Even a timer already dispatched by Tk cannot resume polling.
+    assert not root.timers and not actions
+    assert all(button.closed for button in driver.buttons.values())
+
+
+def test_partial_setup_failure_closes_previously_opened_buttons():
+    created = []
+    def fail_on_third(*args, **kwargs):
+        if len(created) == 2:
+            raise OSError("GPIO already in use")
+        created.append(Button(*args, **kwargs))
+        return created[-1]
+    root = Root()
+    with pytest.raises(OSError, match="already in use"):
+        GPIOButtons(root, lambda _: None, button_factory=fail_on_third)
+    assert all(button.closed for button in created)
+    assert not root.timers
+
+
+def test_destroy_cleanup_ignores_child_widgets(gpio):
+    driver, root, _, _ = gpio
+    root.destroy_callback(SimpleNamespace(widget=object()))
+    assert driver.active
+    root.destroy_callback(SimpleNamespace(widget=root))
+    assert not driver.active and not root.timers
+
+
+def test_callback_failure_stops_polling_and_frees_pins(gpio):
+    driver, root, _, now = gpio
+    def broken(_):
+        raise RuntimeError("callback failed")
+    driver.callback = broken
+    driver.buttons["ok"].is_pressed = True
+    root.tick()
+    now[0] = .07
+    root.tick()
+    assert not driver.active and not root.timers
+    assert all(button.closed for button in driver.buttons.values())
+
+
+def test_callback_can_close_during_poll(gpio):
+    driver, root, _, now = gpio
+    driver.callback = lambda _: driver.close()
+    driver.buttons["left"].is_pressed = True
+    driver.buttons["right"].is_pressed = True
+    root.tick()
+    now[0] = .07
+    root.tick()
+    assert not driver.active and not root.timers
+
+
+@pytest.fixture
+def ui(monkeypatch):
+    tk = pytest.importorskip("tkinter")
+    from pi_ot_probe.tablet.app import TabletApp
+    class Backend:
+        def __init__(self):
+            self.messages = queue.Queue()
+            self.busy, self.closed, self.job_id = False, False, 0
+            self.runs = []
+        def state(self): return [{"node": n, "connection": "online", "health": "ready"} for n in "ABC"]
+        def start(self, key, authorized=False, **kwargs):
+            if not authorized:
+                raise ValueError("Confirm permission first")
+            self.runs.append(key)
+            self.job_id += 1
+            self.busy = True
+        def stop(self): self.busy = False
+        def close(self): self.closed = True
+    try:
+        root = tk.Tk()
+    except tk.TclError as exc:
+        pytest.skip(f"No graphical display for Tk checks: {exc}")
+    root.withdraw()
+    root.attributes("-alpha", 0)
+    monkeypatch.setattr(TabletApp, "refresh_choices", lambda _: None)
+    backend = Backend()
+    app = TabletApp(root, backend, fullscreen=False, size=(480, 320), enable_gpio=False)
+    root.deiconify()
+    root.update()
+    yield app, root, backend
+    try:
+        root.destroy()
+    except tk.TclError:
+        pass
+    app = None
+    gc.collect()
+
+
+def test_gpio_navigation_page_limits_single_item_and_back(ui):
+    from pi_ot_probe.tablet.catalog import CATEGORIES
+    app, root, _ = ui
+    app.gpio_navigate("down")
+    assert app.controller.selected == app.body.winfo_children()[1]
+    app.gpio_navigate("down")
+    assert app.page == 0
+    for _ in range(10):
+        app.gpio_navigate("right")
+    root.update()
+    assert app.page == (len(CATEGORIES) - 1) // 2
+    assert len(app.body.winfo_children()) == 1
+    app.gpio_navigate("down")
+    app.gpio_navigate("ok")
+    root.update()
+    assert app.category == CATEGORIES[-1] and app.page == 0
+    app.gpio_navigate("left")
+    root.update()
+    assert app.category is None and app.page == 0
+    app.gpio_navigate("right")
+    app.gpio_navigate("left")
+    assert app.page == 0
+    app.gpio_navigate("left")
+    assert app.page == 0
+
+
+def test_gpio_can_select_permission_run_and_return_from_tool(ui):
+    import tkinter as tk
+    app, root, backend = ui
+    app.gpio_buttons = SimpleNamespace(active=True, close=lambda: None)
+    app.open_category("Wi-Fi")
+    app.gpio_navigate("ok")
+    # No root.update between presses: selection must track the newly built tool.
+    app.gpio_navigate("ok")
+    assert app.tool.key == "wifi" and app.authorized.get()
+    assert isinstance(app.controller.selected, tk.Checkbutton)
+    for _ in range(10):
+        if app.controller.selected == app.run_button:
+            break
+        app.gpio_navigate("down")
+    app.gpio_navigate("ok")
+    assert backend.runs == ["wifi"]
+    app.set_result("\n".join(f"Reading {i}" for i in range(100)))
+    for _ in range(len(app.controller.items())):
+        if app.controller.selected == app.result_widget:
+            break
+        app.gpio_navigate("down")
+    assert app.controller.selected == app.result_widget
+    app.gpio_navigate("ok")
+    assert app.controller.reading and "LEFT / OK" in app.controls_hint.get()
+    before = app.result_widget.yview()
+    app.gpio_navigate("down")
+    assert app.result_widget.yview()[0] > before[0]
+    app.gpio_navigate("left")
+    assert not app.controller.reading and app.tool.key == "wifi"
+    app.gpio_navigate("left")
+    root.update()
+    assert not backend.busy and app.tool is None and app.category == "Wi-Fi"
+    app.home()
+    root.update()
+    assert app.category is None and app.page == 0
+    assert app.controller.selected == app.body.winfo_children()[0]
+
+
+def test_touch_rebuild_then_gpio_select_has_valid_selection(ui):
+    app, root, _ = ui
+    app.gpio_navigate("down")
+    # Invoke the actual touchscreen controls without GPIO handling.
+    app.body.winfo_children()[0].invoke()
+    root.update()
+    assert app.category == "System"
+    app.gpio_navigate("ok")
+    root.update()
+    assert app.tool.key == "usb"
+
+
+def test_gpio_setup_failure_leaves_gui_usable(ui, monkeypatch):
+    app, root, _ = ui
+    def fail(*args):
+        raise ImportError("gpiozero missing")
+    monkeypatch.setattr("pi_ot_probe.tablet.app.GPIOButtons", fail)
+    app.start_gpio()
+    assert app.gpio_buttons is None
+    app.body.winfo_children()[0].invoke()
+    root.update()
+    assert app.category == "System"
+
+
+def test_app_starts_gpio_once_and_stops_it_before_backend_shutdown(ui, monkeypatch):
+    app, root, backend = ui
+    instances = []
+    class FakeGPIO:
+        active = True
+        def __init__(self, *args): instances.append(self)
+        def close(self): self.active = False
+    monkeypatch.setattr("pi_ot_probe.tablet.app.GPIOButtons", FakeGPIO)
+    app.start_gpio()
+    app.start_gpio()
+    assert len(instances) == 1
+    destroyed = []
+    root.bind("<Destroy>", lambda e: destroyed.append(True) if e.widget is root else None, add="+")
+    app.close()
+    assert not instances[0].active and app.gpio_buttons is None
+    app.gpio_navigate("ok")
+    # Join the existing asynchronous shutdown through Tk's scheduled finish.
+    import time
+    deadline = time.monotonic() + 2
+    while not destroyed and time.monotonic() < deadline:
+        root.update()
+        time.sleep(.01)
+    assert backend.closed and destroyed

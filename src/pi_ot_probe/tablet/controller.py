@@ -1,5 +1,6 @@
-"""Visible focus and five-button navigation, shared by USB buttons and keyboard."""
+"""Shared visible selection for keyboard, USB and direct Pi GPIO navigation."""
 import tkinter as tk
+from .catalog import CATEGORIES, category_tools
 
 
 class Controller:
@@ -29,6 +30,8 @@ class Controller:
                 and (isinstance(w, tk.Text) or str(w.cget("state")) != "disabled")]
 
     def refresh(self):
+        if not self.alive():
+            return
         self.reading = False
         for widget in self.widgets(self.app.root):
             if self.tag not in widget.bindtags():
@@ -46,7 +49,48 @@ class Controller:
             widget.configure(highlightthickness=3, highlightbackground="#4ee3b3", highlightcolor="#4ee3b3")
             widget.focus_set()
             self.reveal(widget)
-        self.app.controls_hint.set("UP/DOWN move · BACK return\nSELECT choose · OK run")
+        gpio = getattr(self.app, "gpio_buttons", None)
+        self.app.controls_hint.set("UP/DOWN move · LEFT back/page\nRIGHT next page · OK choose" if gpio is not None and gpio.active else
+                                   "UP/DOWN move · BACK return\nSELECT choose · OK run")
+
+    def navigate_gpio(self, direction):
+        """D-pad semantics from the Pi handoff, reusing the existing selected widget."""
+        if not self.alive():
+            return
+        # Finish a pending page rebuild before handling a second rapid press.
+        self.app.root.update_idletasks()
+        if self.app.tool is not None:
+            action = {"left": "back", "ok": "select", "up": "up", "down": "down"}.get(direction)
+            if action:
+                self.handle(action)
+            return
+        items = self.items()
+        if not items:
+            return
+        if self.selected not in items:
+            self.focus(items[0])
+        if direction in {"up", "down"}:
+            index = items.index(self.selected) + (-1 if direction == "up" else 1)
+            self.focus(items[max(0, min(index, len(items) - 1))])
+        elif direction == "left":
+            if self.app.page > 0:
+                self.app.turn_page(-1)
+            elif self.app.category:
+                self.app.back()
+        elif direction == "right":
+            choices = category_tools(self.app.category) if self.app.category else CATEGORIES
+            if self.app.page < (len(choices) - 1) // 2:
+                self.app.turn_page(1)
+        elif direction == "ok":
+            self.handle("select")
+
+    def alive(self):
+        if self.app.closing:
+            return False
+        try:
+            return bool(self.app.root.winfo_exists())
+        except tk.TclError:
+            return False
 
     def reveal(self, widget):
         canvas = getattr(self.app, "scroll_canvas", None)
@@ -102,7 +146,10 @@ class Controller:
         elif action in {"select", "ok"} and self.selected is not None:
             if isinstance(self.selected, tk.Text):
                 self.reading = True
-                self.app.controls_hint.set("UP/DOWN scroll results | BACK / SELECT leave results")
+                gpio = getattr(self.app, "gpio_buttons", None)
+                self.app.controls_hint.set("UP/DOWN scroll results | LEFT / OK leave results"
+                                           if gpio is not None and gpio.active else
+                                           "UP/DOWN scroll results | BACK / SELECT leave results")
             else:
                 self.selected.invoke()
         return "break"

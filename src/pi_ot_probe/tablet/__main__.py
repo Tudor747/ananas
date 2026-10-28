@@ -62,11 +62,16 @@ def main(argv=None):
         root.destroy()
         print(f"Cannot start tablet: {exc}", file=sys.stderr)
         return 1
+    window = None
     try:
-        TabletApp(root, backend, fullscreen=not args.windowed, size=size)
+        window = TabletApp(root, backend, fullscreen=not args.windowed, size=size)
         root.mainloop()
     finally:
-        backend.close()
+        try:
+            if window is not None:
+                window.close_gpio()
+        finally:
+            backend.close()
     return 0
 
 
