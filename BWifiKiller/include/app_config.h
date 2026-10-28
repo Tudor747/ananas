@@ -13,11 +13,13 @@
 namespace AppConfig {
 
     // ---------- Buttons ----------
+    // Also used by firmware/node_a to control the native Raspberry Pi menu.
+    // Wire each momentary switch between its GPIO and GND (INPUT_PULLUP).
     constexpr uint8_t  BTN_UP    = 26;
     constexpr uint8_t  BTN_DOWN  = 33;
     constexpr uint8_t  BTN_OK    = 32;
     constexpr uint8_t  BTN_BACK  = 25;
-    constexpr uint8_t  BTN_AUX   = 27;   // Previously called BTN27
+    constexpr uint8_t  BTN_AUX   = 27;   // SELECT on the Pi controller; OK runs the tool.
 
     // ---------- I2C / Display ----------
     constexpr uint8_t  I2C_SDA   = 21;

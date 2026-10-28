@@ -5,12 +5,13 @@ from collections import deque
 import json
 import logging
 import os
+import queue
 from pathlib import Path
 import secrets
 import threading
 import time
 
-from .protocol import Command, Decoder, NodeConfig, ROLES
+from .protocol import BUTTON_ACTIONS, Command, Decoder, NodeConfig, ROLES
 
 logger = logging.getLogger(__name__)
 
@@ -55,8 +56,9 @@ def validate_configs(configs):
 
 
 class NodeWorker:
-    def __init__(self, config, store, opener=serial_open):
+    def __init__(self, config, store, opener=serial_open, on_input=None):
         self.config, self.store, self.opener = config, store, opener
+        self.on_input = on_input
         self.lock = threading.RLock()
         self.stop_event = threading.Event()
         self.queue = deque()
@@ -219,6 +221,15 @@ class NodeWorker:
                             last_status = status
                         pending = None
                         next_heartbeat = now + 1
+                    elif frame.command == "INPUT":
+                        if (frame.node != "A" or frame.id != 0 or set(frame.payload) != {"action"} or
+                                not isinstance(frame.payload["action"], str) or
+                                frame.payload["action"] not in BUTTON_ACTIONS):
+                            raise ValueError("invalid controller input")
+                        # Live input only: replayed evidence must never press buttons.
+                        record = False
+                        if self.on_input:
+                            self.on_input(frame.node, self.session, frame.payload["action"])
                     elif frame.command != "OBSERVE" or frame.payload.get("sensor") not in ROLES[self.config.node]:
                         raise ValueError("unexpected event sensor/command")
                     # Keep health changes and operator requests, not identical idle heartbeats.
@@ -257,7 +268,28 @@ class NodeWorker:
 class NodeManager:
     def __init__(self, configs, store, opener=serial_open):
         self.store = store
-        self.workers = {c.node: NodeWorker(c, store, opener) for c in validate_configs(configs)}
+        self.inputs = queue.Queue(maxsize=32)
+        self.workers = {c.node: NodeWorker(c, store, opener, self._input) for c in validate_configs(configs)}
+
+    def _input(self, node, session, action):
+        try:
+            self.inputs.put_nowait((time.monotonic(), node, session, action))
+        except queue.Full:
+            pass
+
+    def button_actions(self):
+        """Drain fresh presses on the UI thread, dropping stale/disconnected input."""
+        actions = []
+        for _ in range(32):
+            try:
+                received, node, session, action = self.inputs.get_nowait()
+            except queue.Empty:
+                break
+            state = self.workers[node].snapshot()
+            if (time.monotonic() - received < 1 and state["connection"] == "online" and
+                    state.get("session") == session):
+                actions.append(action)
+        return actions
 
     def start(self):
         for worker in self.workers.values():

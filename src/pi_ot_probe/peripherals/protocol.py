@@ -5,6 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 
 MAX_FRAME = 4096
 ROLES = {"A": {"nrf", "wifi", "ble"}, "B": {"cc1101", "rfid"}, "C": {"ir"}}
+BUTTON_ACTIONS = {"up", "down", "back", "select", "ok"}
 
 
 class Frame(BaseModel):
@@ -18,7 +19,7 @@ class Frame(BaseModel):
     seq: int = Field(ge=1, le=4294967295)
     uptime_ms: int = Field(ge=0, le=4294967295)
     type: Literal["reply", "event"]
-    command: Literal["HELLO", "STATUS", "OBSERVE", "STOP", "SET_CONFIG", "TRANSMIT"]
+    command: Literal["HELLO", "STATUS", "OBSERVE", "STOP", "SET_CONFIG", "TRANSMIT", "INPUT"]
     id: int = Field(ge=0, le=4294967295)
     health: Literal["ready", "busy", "error", "unsupported"]
     payload: dict = Field(default_factory=dict)

@@ -1,4 +1,4 @@
-"""Touch-first Tk window. All device work is delegated to the backend worker."""
+"""Touch and physical-button Tk window; device work runs in backend workers."""
 from __future__ import annotations
 
 import queue
@@ -9,6 +9,7 @@ import tkinter as tk
 from pi_ot_probe.peripherals.manager import port_key
 from .catalog import BY_KEY, CATEGORIES, NODE_NAMES, TOOLS, category_tools
 from .diagnostics import discover_choices
+from .controller import Controller
 from .presentation import connection_summary, describe_node, format_result, pretty_record
 
 BG = "#0c1420"
@@ -32,6 +33,7 @@ class TabletApp:
         root.minsize(240, 240)
         root.attributes("-fullscreen", fullscreen)
         self.font_size = max(10, min(18, int(min(width / 26, height / 22))))
+        self.button_padding = 5 if height <= 320 else 9
         root.option_add("*Font", ("DejaVu Sans", self.font_size))
         root.bind("<Escape>", lambda _: root.attributes("-fullscreen", False))
         root.bind("<F11>", lambda _: root.attributes("-fullscreen", not root.attributes("-fullscreen")))
@@ -60,6 +62,7 @@ class TabletApp:
         self.node_notice = tk.StringVar(root)
         self.status = tk.StringVar(root, "Connecting to configured nodes…")
         self.notice = tk.StringVar(root, "")
+        self.controls_hint = tk.StringVar(root)
 
         header = tk.Frame(root, bg=BG)
         header.pack(fill="x", padx=4, pady=2)
@@ -73,10 +76,15 @@ class TabletApp:
         self.status_label.pack(fill="x", padx=8)
         self.status_label.configure(cursor="hand2")
         self.status_label.bind("<ButtonRelease-1>", lambda _: self.open_devices())
+        hint = tk.Label(root, textvariable=self.controls_hint, bg=BG, fg=MUTED,
+                        font=("DejaVu Sans", 9), wraplength=width - 12)
+        hint.pack(side="bottom", fill="x", padx=4)
+        hint.bind("<Configure>", lambda e: hint.configure(wraplength=max(100, e.width - 8)))
         self.footer = tk.Frame(root, bg=BG)
         self.footer.pack(side="bottom", fill="x", padx=4, pady=3)
         self.body = tk.Frame(root, bg=BG)
         self.body.pack(fill="both", expand=True, padx=5, pady=3)
+        self.controller = Controller(self)
         self.home()
         self.refresh_choices()
         self.poll()
@@ -85,7 +93,8 @@ class TabletApp:
         return tk.Button(parent, text=text, command=command, bg=ACCENT if primary else PANEL,
                          fg=BG if primary else TEXT, activebackground="#2c7169", activeforeground=TEXT,
                          disabledforeground="#73869b", relief="flat", borderwidth=0,
-                         padx=9, pady=9, highlightthickness=0, **kwargs)
+                         padx=9, pady=self.button_padding, highlightthickness=3,
+                         highlightbackground=PANEL, highlightcolor=ACCENT, **kwargs)
 
     def reset_body(self):
         self.generation += 1
@@ -99,6 +108,8 @@ class TabletApp:
         self.result_widget = self.graph = self.run_button = None
         self.forget_button = None
         self.result_text = None
+        self.scroll_canvas = None
+        self.root.after_idle(self.controller.refresh)
 
     def home(self):
         if self.backend.busy:
@@ -140,7 +151,7 @@ class TabletApp:
             if isinstance(choice, str):
                 label, callback = choice, lambda c=choice: self.open_category(c)
                 count = sum(t.action is not None for t in category_tools(choice))
-                subtitle = f"{count} available · tap to open" if count else "Original entries · unavailable"
+                subtitle = f"{count} available · SELECT to open" if count else "Original entries · unavailable"
             else:
                 label, callback = choice.title, lambda c=choice: self.show_tool(c)
                 subtitle = (f"ESP-{choice.node}" if choice.node else "Raspberry Pi") if choice.action else "Unavailable"
@@ -439,6 +450,8 @@ class TabletApp:
             self.run_button.configure(state="normal" if available else "disabled")
         if self.forget_button:
             self.forget_button.configure(state="disabled" if self.backend.busy else "normal")
+        for action in getattr(self.backend, "button_actions", lambda: [])():
+            self.controller.handle(action)
         self.root.after(150, self.poll)
 
     def memory_game(self):

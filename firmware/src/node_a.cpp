@@ -8,6 +8,7 @@
 #include <BLEScan.h>
 #include "app_config.h"
 #include "sentinel_protocol.h"
+#include "sentinel_buttons.h"
 
 // Use a conservative bus clock instead of the legacy profile's 16 MHz.
 static constexpr uint32_t NRF_SPI_HZ = 4000000;
@@ -136,6 +137,7 @@ void hardwarePoll() {
 }
 void setup() {
     Sentinel::setup();
+    ControllerButtons::setup();
     // Both radios share MISO: deselect both before either begin() touches SPI.
     for (uint8_t pin : {AppConfig::NRF1_CSN, AppConfig::NRF2_CSN}) {
         digitalWrite(pin, HIGH); pinMode(pin, OUTPUT);
@@ -147,4 +149,4 @@ void setup() {
     delay(100); // Allow both module supplies to settle before probing registers.
     ready1 = radio1.begin(); ready2 = radio2.begin(); hardwareStop();
 }
-void loop() { Sentinel::poll(); delay(1); }
+void loop() { Sentinel::poll(); ControllerButtons::poll(Sentinel::button); delay(1); }

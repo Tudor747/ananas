@@ -5,6 +5,11 @@ single-ESP requirements below. See [RF Sentinel integration](sentinel-integratio
 for firmware profiles, two-option touch pages, USB event transport and manual tests.
 Legacy PING/SELFTEST and manual instrument registration remain separate interfaces.
 
+The current native tablet supports five ESP-A buttons: Up, Down, Back, Select and
+OK. They are forwarded over USB by `node_a`; see the [controller wiring and menu
+guide](tablet-app.md#five-button-controller-on-esp-a). The older requirements below
+describe an earlier four-button assembly and touch behavior, not the current UI.
+
 # Earlier Raspberry Pi appliance requirements (historical)
 
 Updated 2026-10-22. This is the current build scope and supersedes older

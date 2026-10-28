@@ -302,6 +302,50 @@ def test_manager_rejects_duplicate_assignments_without_opening_ports(tmp_path, f
                     lambda _: pytest.fail("invalid configuration must not open USB"))
 
 
+def test_controller_input_is_live_session_bound_and_not_evidence(tmp_path):
+    store = EvidenceStore(Repository(tmp_path / "db"))
+    port = FakeSerial()
+    manager = NodeManager([config()], store, lambda _: port)
+    manager.start()
+    try:
+        wait_until(lambda: manager.state()[0]["connection"] == "online")
+        session = manager.state()[0]["session"]
+        port.seq += 1
+        port.buffer.extend(wire(seq=port.seq, session=session, type="event", command="INPUT",
+                                id=0, payload={"action": "select"}))
+        wait_until(lambda: not manager.inputs.empty())
+        assert manager.button_actions() == ["select"]
+        assert manager.button_actions() == []
+        assert not any(e["data"].get("command") == "INPUT" for e in store.events())
+        manager._input("A", "previous-session", "ok")
+        manager.inputs.put_nowait((time.monotonic() - 2, "A", session, "ok"))
+        assert manager.button_actions() == []
+        manager._input("A", session, "ok")
+    finally:
+        manager.stop()
+    assert manager.button_actions() == []
+
+
+@pytest.mark.parametrize("node,payload", [("B", {"action": "ok"}), ("A", {"action": "unknown"}),
+                                         ("A", {"action": ["ok"]})])
+def test_invalid_controller_input_cannot_operate_menu(tmp_path, node, payload):
+    port = FakeSerial(node)
+    manager = NodeManager([config(node)], EvidenceStore(Repository(tmp_path / "db")), lambda _: port)
+    manager.start()
+    try:
+        index = "ABC".index(node)
+        wait_until(lambda: manager.state()[index]["connection"] == "online")
+        port.seq += 1
+        port.buffer.extend(wire(node=node, device=f"chip-{node}", seq=port.seq,
+                                session=manager.state()[index]["session"], type="event", command="INPUT",
+                                id=0, payload=payload))
+        wait_until(lambda: manager.state()[index]["connection"] == "offline")
+        assert manager.button_actions() == []
+        assert "controller input" in manager.state()[index]["error"]
+    finally:
+        manager.stop()
+
+
 def test_stop_preempts_an_already_expired_reply(tmp_path, monkeypatch):
     from pi_ot_probe.peripherals.manager import NodeWorker
     clock = [100.0]

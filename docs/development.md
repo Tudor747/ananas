@@ -7,8 +7,9 @@ before the ESP can answer; physical deployment has not been verified here.
 The deployment target is a Raspberry Pi controlling three ESP nodes: A for
 Wi-Fi/BLE/nRF, B for CC1101/RFID and C for infrared. The native tablet app has
 two large menu choices per page and touch scrolling; see the
-[tablet guide](tablet-app.md). Physical button wiring and mappings still need
-to be resolved before implementing a GPIO input adapter.
+[tablet guide](tablet-app.md). ESP-A forwards its five controller buttons over
+USB; edit `BWifiKiller/include/app_config.h` for the GPIO assignments and
+`tablet/controller.py` for menu navigation.
 
 Start with the working website. You do not need Raspberry Pi hardware, a
 frontend build tool, or knowledge of every folder to make your first change.

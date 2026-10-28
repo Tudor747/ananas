@@ -36,10 +36,11 @@ inline void convertToJson(const String& value, JsonVariant result) { result.set(
 inline uint32_t clock_ms = 0;
 inline uint32_t millis() { return clock_ms; }
 inline void delay(unsigned ms) { clock_ms += ms; }
-constexpr int HIGH = 1, LOW = 0, OUTPUT = 1;
+constexpr int HIGH = 1, LOW = 0, OUTPUT = 1, INPUT_PULLUP = 2;
 inline int pin_levels[40] = {}, pin_modes[40] = {};
 inline void digitalWrite(int pin, int level) { pin_levels[pin] = level; }
-inline void pinMode(int pin, int mode) { pin_modes[pin] = mode; }
+inline void pinMode(int pin, int mode) { pin_modes[pin] = mode; if (mode == INPUT_PULLUP) pin_levels[pin] = HIGH; }
+inline int digitalRead(int pin) { return pin_levels[pin]; }
 inline struct SPIClass { void begin() {} } SPI;
 constexpr int RF24_1MBPS = 1, RF24_PA_MIN = 0, RF24_CRC_16 = 2;
 class RF24 {
@@ -105,6 +106,7 @@ namespace Sentinel {
     }
     inline void emit() { serializeJson(document, std::cout); std::cout << '\n'; }
     inline void setup() {} inline void poll() {}
+    inline void button(const char*) {}
 }
 ''', encoding="utf-8")
     (folder / "main.cpp").write_text(r'''
@@ -129,7 +131,7 @@ int main(int argc, char** argv) {
 ''', encoding="utf-8")
     binary = folder / ("node-a-test.exe" if os.name == "nt" else "node-a-test")
     subprocess.run([compiler, "-std=c++17", "-static", "-I", str(folder), "-I", str(json_headers),
-                    "-I", str(ROOT / "BWifiKiller/include"), str(folder / "main.cpp"),
+                    "-I", str(ROOT / "BWifiKiller/include"), "-I", str(ROOT / "firmware/include"), str(folder / "main.cpp"),
                     str(ROOT / "firmware/src/node_a.cpp"), "-o", str(binary)],
                    check=True, capture_output=True, text=True, timeout=60)
     return binary
@@ -153,6 +155,51 @@ def test_failed_wifi_scan_is_not_reported_as_empty_success(node_a_binary, scenar
     assert events[0]["error"]
 
 
+def test_actual_button_driver_debounces_repeats_only_navigation_and_survives_wrap(node_a_binary):
+    folder = node_a_binary.parent
+    (folder / "buttons.cpp").write_text(r'''
+#include "sentinel_buttons.h"
+#include <vector>
+std::vector<std::string> presses;
+void emit(const char* action) { presses.push_back(action); }
+void tick(uint32_t now) { clock_ms = now; ControllerButtons::poll(emit); }
+int main() {
+    ControllerButtons::setup();
+    pin_levels[AppConfig::BTN_OK] = LOW; tick(10);
+    pin_levels[AppConfig::BTN_OK] = HIGH; tick(20);
+    pin_levels[AppConfig::BTN_OK] = LOW; tick(25); tick(54);
+    assert(presses.empty());
+    tick(55); tick(1000);
+    assert(presses == std::vector<std::string>{"ok"}); // Held OK never reruns.
+    pin_levels[AppConfig::BTN_OK] = HIGH; tick(1010); tick(1040);
+    pin_levels[AppConfig::BTN_UP] = LOW; tick(1050); tick(1080); tick(1429);
+    assert(presses.size() == 2 && presses.back() == "up");
+    tick(1430); tick(1520);
+    assert(presses.size() == 4 && presses.back() == "up");
+    pin_levels[AppConfig::BTN_UP] = HIGH; tick(1530); tick(1560);
+    pin_levels[AppConfig::BTN_AUX] = LOW; tick(0xfffffff0); tick(0x0e);
+    assert(presses.back() == "select");
+    tick(1000);
+    assert(presses.size() == 5); // Held Select never retoggles a checkbox.
+    // A held-at-boot input is ignored until released and pressed again.
+    auto& back = ControllerButtons::keys[2];
+    back.raw = back.stable = true; back.armed = false;
+    pin_levels[AppConfig::BTN_BACK] = LOW; tick(1100);
+    assert(presses.size() == 5);
+    pin_levels[AppConfig::BTN_BACK] = HIGH; tick(1110); tick(1140);
+    pin_levels[AppConfig::BTN_BACK] = LOW; tick(1150); tick(1180);
+    assert(presses.back() == "back" && presses.size() == 6);
+}
+''', encoding="utf-8")
+    binary = folder / ("buttons.exe" if os.name == "nt" else "buttons")
+    subprocess.run([shutil.which("g++"), "-std=c++17", "-static", "-I", str(folder),
+                    "-I", str(ROOT / "firmware/.pio/libdeps/node_a/ArduinoJson/src"),
+                    "-I", str(ROOT / "firmware/include"), "-I", str(ROOT / "BWifiKiller/include"),
+                    str(folder / "buttons.cpp"), "-o", str(binary)],
+                   check=True, capture_output=True, text=True, timeout=60)
+    subprocess.run([str(binary)], check=True, capture_output=True, text=True, timeout=5)
+
+
 def test_node_b_keeps_rfid_bus_when_cc1101_is_missing(node_a_binary):
     folder = node_a_binary.parent
     (folder / "RadioLib.h").write_text(r'''
@@ -160,7 +207,6 @@ def test_node_b_keeps_rfid_bus_when_cc1101_is_missing(node_a_binary):
 constexpr int RADIOLIB_NC = -1, RADIOLIB_ERR_NONE = 0;
 constexpr int RADIOLIB_ERR_PACKET_TOO_LONG = -2, MSBFIRST = 1, SPI_MODE0 = 0;
 inline bool bus_running = true;
-inline int digitalRead(int) { return 0; }
 struct SPISettings { SPISettings(int, int, int) {} };
 struct Module {
     bool owns_bus;

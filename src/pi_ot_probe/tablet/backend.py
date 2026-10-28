@@ -89,6 +89,9 @@ class TabletBackend:
     def state(self):
         return self.manager.state()
 
+    def button_actions(self):
+        return self.manager.button_actions()
+
     def start(self, key, authorized=False, **options):
         if self.busy or self.closing.is_set():
             raise ValueError("An operation is running. Stop it or wait for completion.")

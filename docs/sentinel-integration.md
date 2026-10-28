@@ -137,8 +137,9 @@ Open `/console`. It presents two module buttons per page, vertical swipe paging,
 large Previous/Next controls, node connection states, operator/test inputs and
 Stop All. The layout adapts to viewport dimensions; no HSD28309 EI resolution is
 assumed. Run `bash scripts/sentinel-kiosk.sh` inside the Pi desktop for full-screen
-Chromium. Physical GPIO button-to-Pi navigation is not implemented; use touchscreen
-or browser keyboard focus controls. ESP button wiring is not repurposed.
+Chromium. For the browser console, use touchscreen or browser keyboard focus
+controls. ESP-A's physical button forwarding controls the native tablet app;
+see the [five-button controller guide](tablet-app.md#five-button-controller-on-esp-a).
 
 Select a module, enter operator/purpose, confirm authorization, and press Observe.
 A request being queued is not a successful hardware result: inspect its correlated
@@ -170,7 +171,12 @@ Request example:
 Reply/event fields: `v`, `node`, `device`, `boot`, `session`, `firmware`, `seq`,
 `uptime_ms`, `type`, `command`, `id`, `health`, `payload`. A reply's ID matches its
 request. Observation events carry the originating observation request ID.
-Supported commands are HELLO, STATUS, OBSERVE, STOP, nRF SET_CONFIG (channel), and
+ESP-A additionally emits live `event` frames with `command: "INPUT"`, `id: 0`,
+and `payload: {"action": "up"}` (also `down`, `back`, `select`, `ok`). They use the
+same verified identity/session/sequence as observations and are delivered only to
+the native tablet controller. They are not stored or replayed as evidence.
+
+Supported host commands are HELLO, STATUS, OBSERVE, STOP, nRF SET_CONFIG (channel), and
 bounded TRANSMIT (one nRF peer test or one NEC IR code). No arbitrary driver/register
 commands are exposed.
 

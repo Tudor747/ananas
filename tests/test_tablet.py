@@ -300,6 +300,95 @@ def test_no_window_needed_for_cli_checks(monkeypatch, capsys):
     assert json.loads(capsys.readouterr().out)[0]["ok"]
 
 
+def test_five_button_menu_can_run_stop_and_read_without_touch(monkeypatch):
+    tk = pytest.importorskip("tkinter")
+    from pi_ot_probe.tablet.app import TabletApp
+
+    class Backend:
+        busy = False
+        job_id = 0
+        messages = queue.Queue()
+        runs = []
+        stops = 0
+        def state(self): return [{"node": n, "connection": "online", "health": "ready"} for n in "ABC"]
+        def start(self, key, authorized=False, **kwargs):
+            if not authorized:
+                raise ValueError("Confirm permission for this test first.")
+            self.runs.append(key)
+            self.job_id += 1
+            self.busy = True
+        def stop(self):
+            self.stops += 1
+            self.busy = False
+
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        pytest.skip("No graphical display is available for controller checks")
+    root.withdraw()
+    root.attributes("-alpha", 0)
+    monkeypatch.setattr(TabletApp, "refresh_choices", lambda _: None)
+    backend = Backend()
+    try:
+        app = TabletApp(root, backend, fullscreen=False, size=(480, 320))
+        root.deiconify()
+        root.update()
+        controller = app.controller
+        first = controller.selected
+        controller.handle("down")
+        assert controller.selected != first
+        controller.handle("down")
+        assert app.page == 1
+        controller.handle("up")
+        assert app.page == 0
+        assert controller.selected == app.body.winfo_children()[-1]
+        app.open_category("Wi-Fi")
+        root.update()
+        controller.handle("select")
+        root.update()
+        assert app.tool.key == "wifi"
+        assert isinstance(controller.selected, tk.Checkbutton)
+        controller.handle("ok")
+        assert not backend.runs
+        assert "permission" in app.notice.get()
+        controller.handle("select")
+        assert app.authorized.get()
+        controller.handle("ok")
+        assert backend.runs == ["wifi"]
+        controller.handle("back")
+        root.update()
+        assert backend.stops == 1
+        assert app.tool is None
+        controller.handle("select")
+        root.update()
+        app.set_result("\n".join(f"Reading {i}" for i in range(100)))
+        # Reach the results using only the directional buttons.
+        for _ in range(len(controller.items())):
+            if controller.selected == app.result_widget:
+                break
+            controller.handle("down")
+        assert controller.selected == app.result_widget
+        controller.handle("select")
+        assert controller.reading
+        before = app.result_widget.yview()
+        controller.handle("down")
+        assert app.result_widget.yview()[0] > before[0]
+        controller.handle("back")
+        assert not controller.reading and app.tool.key == "wifi"
+        # Keyboard events are consumed ahead of Tk's default checkbox action.
+        checkbox = next(w for w in controller.items() if isinstance(w, tk.Checkbutton))
+        controller.focus(checkbox)
+        checkbox.focus_force()
+        root.update()
+        before = app.authorized.get()
+        checkbox.event_generate("<KeyPress-space>")
+        checkbox.event_generate("<KeyRelease-space>")
+        root.update()
+        assert app.authorized.get() != before
+    finally:
+        root.destroy()
+
+
 @pytest.mark.parametrize("size", [(320, 240), (480, 320), (800, 480)])
 def test_native_layout_and_navigation(size, monkeypatch):
     tk = pytest.importorskip("tkinter")

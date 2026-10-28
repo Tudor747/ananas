@@ -52,7 +52,50 @@ the right scrollbar or drag the descriptions; drag inside results to scroll
 the results. **Stop all** cancels the current job and sends STOP to every connected
 ESP. Home/Back also stop active work.
 The X button closes the app and stops its devices. Escape leaves fullscreen;
-F11 toggles it. No physical GPIO button mapping is added.
+F11 toggles it. ESP-A can also act as a five-button USB controller (see below).
+
+## Five-button controller on ESP-A
+
+Change the button GPIO numbers in
+[`BWifiKiller/include/app_config.h`](../BWifiKiller/include/app_config.h).
+The `node_a` firmware uses these same definitions:
+
+| Button | Definition | Default ESP GPIO | Native Pi menu action |
+| --- | --- | --- | --- |
+| Up | `BTN_UP` | 26 | Move the highlight up; hold to repeat |
+| Down | `BTN_DOWN` | 33 | Move the highlight down; hold to repeat |
+| Back | `BTN_BACK` | 25 | Stop active work and return to the previous menu |
+| Select | `BTN_AUX` | 27 | Open the highlighted item or toggle a setting |
+| OK | `BTN_OK` | 32 | Run the current tool; open the highlighted item on menus |
+
+Wire each momentary button between its **ESP-A GPIO and GND**. The firmware uses
+internal pull-ups, so pressing a button pulls its input low. These are ESP GPIO
+numbers, not Raspberry Pi header positions. Keep button pins separate from the
+SPI/radio pins. Pins and debounce/repeat timings are in the same configuration file.
+Select and OK trigger once per press; holding them does not repeat an operation.
+
+Build and upload the updated ESP-A firmware after changing pins:
+
+```sh
+pio run -d firmware -e node_a
+pio run -d firmware -e node_a -t upload --upload-port YOUR_A_PORT
+```
+
+Close the tablet/serial monitor before uploading, then restart `bash run-tablet.sh`
+with the updated Python code. B/C can stay on their existing firmware. Buttons
+travel over A's existing USB connection and control the native Tk menu only.
+First pair ESP-A using a keyboard or an existing `data/nodes.json`; its physical
+buttons become available after USB identification. Keyboard equivalents are
+Up/Down, Left or Backspace for Back, Space or Right for Select, and Enter for OK.
+
+The green outline marks the selected control. Up/Down automatically cross menu
+pages and scroll tool settings into view. Select the permission checkbox before
+OK; the controller uses the same authorization checks as the Run button. To read
+long output, highlight the result box and press Select, then use Up/Down to scroll.
+Back or Select leaves result reading without leaving the tool. Select **Stop all**
+to stop work while keeping the tool visible. No touchscreen is required for these
+flows. Old/disconnected USB presses are discarded and input is not replayed from
+saved evidence. Physical wiring still needs testing on the actual board.
 
 For a desktop preview:
 

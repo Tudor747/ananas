@@ -32,6 +32,12 @@ inline JsonObject begin(const char* type, const char* command, uint32_t id, cons
     return response.createNestedObject("payload");
 }
 inline void emit() { serializeJson(response, Serial); Serial.println(); }
+inline void button(const char* action) {
+    if (!session[0]) return;
+    auto p = begin("event", "INPUT", 0, hardwareHealth());
+    p["action"] = action;
+    emit();
+}
 inline JsonObject event(const char* sensor) {
     JsonObject p = begin("event", "OBSERVE", observationId, hardwareHealth());
     p["sensor"] = sensor;
