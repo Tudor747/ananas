@@ -44,14 +44,19 @@ class Controller:
     def focus(self, widget):
         if self.selected is not None and self.selected.winfo_exists():
             self.selected.configure(highlightbackground="#172638", highlightcolor="#172638")
+            if hasattr(self.selected, "_unfocused_bg"):
+                self.selected.configure(bg=self.selected._unfocused_bg)
         self.selected = widget
         if widget is not None:
+            if isinstance(widget, tk.Button):
+                if not hasattr(widget, "_unfocused_bg"):
+                    widget._unfocused_bg = widget.cget("bg")
+                widget.configure(bg="#29644f")
             widget.configure(highlightthickness=3, highlightbackground="#4ee3b3", highlightcolor="#4ee3b3")
             widget.focus_set()
             self.reveal(widget)
-        gpio = getattr(self.app, "gpio_buttons", None)
-        self.app.controls_hint.set("UP/DOWN move · LEFT back/page\nRIGHT next page · OK choose" if gpio is not None and gpio.active else
-                                   "UP/DOWN move · BACK return\nSELECT choose · OK run")
+        self.app.controls_hint.set("UP/DOWN move · LEFT back\nOK choose · RIGHT next page" if self.app.tool is None else
+                                   "UP/DOWN move · LEFT back · OK choose")
 
     def navigate_gpio(self, direction):
         """D-pad semantics from the Pi handoff, reusing the existing selected widget."""
@@ -70,8 +75,7 @@ class Controller:
         if self.selected not in items:
             self.focus(items[0])
         if direction in {"up", "down"}:
-            index = items.index(self.selected) + (-1 if direction == "up" else 1)
-            self.focus(items[max(0, min(index, len(items) - 1))])
+            self.handle(direction)
         elif direction == "left":
             if self.app.page > 0:
                 self.app.turn_page(-1)
@@ -140,9 +144,6 @@ class Controller:
                     self.focus(items[target])
             else:
                 self.focus(items[index % len(items)])
-        elif action == "ok" and self.app.tool is not None and self.app.run_button is not None:
-            # Invoke the same guarded Run control as touch; never bypass permission.
-            self.app.run_button.invoke()
         elif action in {"select", "ok"} and self.selected is not None:
             if isinstance(self.selected, tk.Text):
                 self.reading = True

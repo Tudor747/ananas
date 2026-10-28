@@ -31,6 +31,7 @@ class TabletApp:
     def __init__(self, root, backend, fullscreen=True, size=None, enable_gpio=None):
         self.root, self.backend = root, backend
         self.gpio_buttons = None
+        self.usb_step = "role"
         self._menu_refresh_id = None
         root.title("RF Sentinel · Tablet")
         root.configure(bg=BG)
@@ -160,6 +161,11 @@ class TabletApp:
         self.show_tool(BY_KEY[key])
 
     def back(self):
+        if self.tool and self.tool.action == "pair" and not self.backend.busy:
+            previous = {"port": "role", "confirm": "port", "forget": "port", "done": "role"}
+            if self.usb_step in previous:
+                self.usb_screen(previous[self.usb_step])
+                return
         if self.backend.busy:
             self.backend.stop()
         if self.tool:
@@ -246,6 +252,8 @@ class TabletApp:
     def show_tool(self, tool):
         if self.backend.busy and tool != self.tool:
             self.backend.stop()
+        if tool.action == "pair" and (self.tool is None or self.tool.action != "pair"):
+            self.usb_step = "role"
         self.tool = tool
         self.reset_body()
         self.title.configure(text=tool.title)
@@ -253,6 +261,9 @@ class TabletApp:
         self.notice.set("")
         if tool.action == "memory":
             self.memory_game()
+            return
+        if tool.action == "pair":
+            self.show_usb_setup()
             return
         content = self.scroll_area()
         self.label(content, tool.description, MUTED)
@@ -280,36 +291,6 @@ class TabletApp:
             if not self.networks:
                 self.label(content, "No local private network found yet. Tap Refresh after connecting.", ERROR)
             self.button(content, "Refresh networks", self.refresh_choices).pack(fill="x", pady=4)
-        if tool.action == "pair":
-            self.label(content, "Close serial monitors and the web server. Choose the role flashed on this ESP. Connecting pauses all USB nodes briefly.")
-            if getattr(self.backend, "config_error", ""):
-                self.label(content, f"Configuration error: {self.backend.config_error}", ERROR)
-            roles = tk.Frame(content, bg=BG)
-            roles.pack(fill="x")
-            for role in "ABC":
-                tk.Radiobutton(roles, text=role, variable=self.role, value=role, indicatoron=False,
-                               command=lambda: self.show_tool(tool), bg=PANEL, fg=TEXT,
-                               selectcolor="#29644f", pady=10).pack(side="left", expand=True, fill="x")
-            self.label(content, f"ESP-{self.role.get()}: {NODE_NAMES[self.role.get()]}")
-            assigned = {port_key(s["port"]): s["node"] for s in self.backend.state() if s.get("port")}
-            available = [p["port"] for p in self.ports if assigned.get(port_key(p["port"])) in {None, self.role.get()}]
-            if self.selected_port.get() not in available:
-                self.selected_port.set(available[0] if available else "")
-            for port in self.ports:
-                owner = assigned.get(port_key(port["port"]))
-                suffix = f" · assigned to {owner}" if owner else ""
-                tk.Radiobutton(content, text=f"{port['port']}\n{port['description']}{suffix}", variable=self.selected_port,
-                               value=port["port"], bg=BG, fg=TEXT, selectcolor=PANEL,
-                               state="normal" if port["port"] in available else "disabled",
-                               anchor="w", justify="left", pady=10, wraplength=230).pack(fill="x")
-            if not self.ports:
-                self.label(content, "No serial ports detected. Connect the ESP and refresh.", ERROR)
-            self.button(content, "Refresh USB ports", self.refresh_choices).pack(fill="x", pady=4)
-            if self.role.get() in assigned.values():
-                self.forget_button = self.button(content, f"Forget ESP-{self.role.get()} setup",
-                                                 lambda: self.run_tool(forget=True))
-                self.forget_button.pack(fill="x", pady=4)
-                self.label(content, "Frees this role's USB port. Keeps reports and the other boards' setup.", MUTED)
         if tool.action in {"pair", "ip"} and self.choice_errors:
             self.label(content, "\n".join(self.choice_errors), ERROR)
         self.label(content, variable=self.notice, color=ACCENT)
@@ -329,6 +310,76 @@ class TabletApp:
         self.button(self.footer, "Stop all", self.stop_work).pack(side="left", fill="x", expand=True, padx=2)
         if tool.action in {"about", "overview", "dependencies", "logs"} and not self.backend.busy:
             self.run_tool()
+
+    def usb_screen(self, step, *, role=None, port=None):
+        if self.backend.busy:
+            return
+        if role is not None:
+            self.role.set(role)
+        if port is not None:
+            self.selected_port.set(port)
+        self.usb_step = step
+        self.show_tool(BY_KEY["usb"])
+
+    def show_usb_setup(self):
+        """Short, linear screens: every choice is a full-width D-pad target."""
+        content = self.scroll_area()
+        role = self.role.get()
+        step = self.usb_step
+        self.title.configure(text={"role": "1/3 Choose ESP", "port": "2/3 Choose USB",
+                                   "confirm": "3/3 Connect ESP", "forget": "Forget setup?",
+                                   "done": "Setup saved"}[step])
+
+        def choice(text, command):
+            button = self.button(content, text, command, anchor="w", justify="left")
+            button.pack(fill="x", pady=3)
+            button.bind("<Configure>", lambda e: button.configure(wraplength=max(80, e.width - 24)))
+            return button
+
+        states = self.backend.state()
+        assigned = {port_key(s["port"]): s["node"] for s in states if s.get("port")}
+        if step == "role":
+            for name in "ABC":
+                state = next((s for s in states if s["node"] == name), {})
+                status = state.get("connection", "unconfigured")
+                choice(f"ESP-{name}  |  {status}\n{NODE_NAMES[name]}",
+                       lambda n=name: self.usb_screen("port", role=n))
+        elif step == "port":
+            self.label(content, f"ESP-{role}: {NODE_NAMES[role]}", MUTED)
+            available = [p for p in self.ports if assigned.get(port_key(p["port"])) in {None, role}]
+            for index, port in enumerate(available, 1):
+                # ttyUSB number plus socket/serial suffix distinguishes identical bridges.
+                endpoint = port_key(port["port"]).replace("\\", "/").rsplit("/", 1)[-1]
+                suffix = port["port"].replace("\\", "/").rsplit("/", 1)[-1]
+                suffix = suffix if len(suffix) <= 28 else "..." + suffix[-25:]
+                choice(f"USB {index}: {endpoint}\n{suffix}",
+                       lambda p=port["port"]: self.usb_screen("confirm", port=p))
+            if not available:
+                self.label(content, "No free USB ports. Plug in the ESP, then choose Refresh.", ERROR)
+            for owner in sorted(set(assigned.values()) - {role}):
+                self.label(content, f"ESP-{owner}'s USB port is already assigned.", MUTED)
+            choice("Refresh USB ports", self.refresh_choices)
+            if role in assigned.values():
+                choice(f"Forget ESP-{role} setup...", lambda: self.usb_screen("forget"))
+        elif step in {"confirm", "forget"}:
+            forgetting = step == "forget"
+            endpoint = port_key(self.selected_port.get()).replace("\\", "/").rsplit("/", 1)[-1]
+            self.label(content, f"ESP-{role}: {NODE_NAMES[role]}" + ("" if forgetting else f"\nUSB: {endpoint}"), MUTED)
+            self.run_button = choice(f"Forget ESP-{role}" if forgetting else f"Connect ESP-{role} now",
+                                     lambda: self.run_tool(forget=True) if forgetting else self.run_tool())
+            choice("Cancel / choose another port", lambda: self.usb_screen("port"))
+            self.label(content, "Other boards and reports are kept." if forgetting else self.selected_port.get())
+            self.label(content, "USB connections pause briefly during setup.", MUTED)
+        else:
+            choice("Set up another ESP", lambda: self.usb_screen("role"))
+            choice("Back to System", lambda: self.open_category("System"))
+        if getattr(self.backend, "config_error", ""):
+            self.label(content, self.backend.config_error, ERROR)
+        if self.choice_errors:
+            self.label(content, "\n".join(self.choice_errors), ERROR)
+        tk.Label(self.footer, textvariable=self.notice, bg=BG, fg=ACCENT,
+                 wraplength=max(180, self.root.winfo_width() - 20)).pack(fill="x")
+        self.button(self.footer, "Back", self.back).pack(fill="x")
 
     def refresh_choices(self):
         if self.refreshing:
@@ -449,9 +500,10 @@ class TabletApp:
                 self.notice.set(f"Complete · saved to {message['path']}")
                 result = message["result"]
                 if self.tool and self.tool.action == "pair":
+                    self.usb_step = "done"
                     # Rebuild assignments before showing the result so freed ports are selectable.
                     self.show_tool(self.tool)
-                    self.notice.set(f"Complete · saved to {message['path']}")
+                    self.notice.set("Setup saved. Other boards kept.")
                 if self.tool and self.tool.action == "about":
                     result = {**result, "screen_pixels": [self.root.winfo_screenwidth(), self.root.winfo_screenheight()],
                               "window_pixels": [self.root.winfo_width(), self.root.winfo_height()],
@@ -466,7 +518,7 @@ class TabletApp:
                 self.networks, self.ports = message["networks"], message["ports"]
                 if self.target.get() not in {n["safe_target"] for n in self.networks}:
                     self.target.set(self.networks[0]["safe_target"] if self.networks else "")
-                if self.selected_port.get() not in {p["port"] for p in self.ports}:
+                if self.usb_step != "confirm" and self.selected_port.get() not in {p["port"] for p in self.ports}:
                     self.selected_port.set(self.ports[0]["port"] if self.ports else "")
                 if self.tool and self.tool.action in {"pair", "ip"} and not self.backend.busy:
                     self.show_tool(self.tool)
@@ -481,7 +533,8 @@ class TabletApp:
             if self.tool.node:
                 available &= any(s["node"] == self.tool.node and s["connection"] == "online" for s in states)
             if self.tool.action == "pair":
-                available &= bool(self.selected_port.get())
+                available &= (self.usb_step == "forget" or
+                              self.selected_port.get() in {p["port"] for p in self.ports})
             if self.tool.action == "ip":
                 available &= bool(self.target.get())
             self.run_button.configure(state="normal" if available else "disabled")

@@ -73,7 +73,7 @@ Each momentary button connects its GPIO to common ground. Internal pull-ups are
 enabled. GPIO 16 belongs to the planned ON/OFF switch and is **not opened or used**.
 No ESP firmware or `BWifiKiller` changes are needed for these Pi buttons.
 
-UP/DOWN stop at the first/last menu item; LEFT/RIGHT change pages. Single-item
+UP/DOWN automatically cross menu pages; LEFT/RIGHT also change pages. Single-item
 pages keep a valid highlight. In a tool, use UP/DOWN and OK to toggle permission,
 select a USB role/port, Run, or Stop all. Select the result box with OK to read it;
 UP/DOWN then scroll the output and LEFT/OK leave result-reading mode. The next
@@ -120,7 +120,7 @@ The `node_a` firmware uses these same definitions:
 | Down | `BTN_DOWN` | 33 | Move the highlight down; hold to repeat |
 | Back | `BTN_BACK` | 25 | Stop active work and return to the previous menu |
 | Select | `BTN_AUX` | 27 | Open the highlighted item or toggle a setting |
-| OK | `BTN_OK` | 32 | Run the current tool; open the highlighted item on menus |
+| OK | `BTN_OK` | 32 | Activate the highlighted item or control |
 
 Wire each momentary button between its **ESP-A GPIO and GND**. The firmware uses
 internal pull-ups, so pressing a button pulls its input low. These are ESP GPIO
@@ -143,8 +143,8 @@ buttons become available after USB identification. Keyboard equivalents are
 Up/Down, Left or Backspace for Back, Space or Right for Select, and Enter for OK.
 
 The green outline marks the selected control. Up/Down automatically cross menu
-pages and scroll tool settings into view. Select the permission checkbox before
-OK; the controller uses the same authorization checks as the Run button. To read
+pages and scroll tool settings into view. Activate the permission checkbox, then highlight Run and press OK;
+the controller uses the same authorization checks as touch. To read
 long output, highlight the result box and press Select, then use Up/Down to scroll.
 Back or Select leaves result reading without leaving the tool. Select **Stop all**
 to stop work while keeping the tool visible. No touchscreen is required for these
@@ -166,7 +166,8 @@ display connection must actually be available, not just a DISPLAY variable.
 
 1. Open **System > USB Setup** (System is on the first home page). You can also
    tap the connection strip at the top when no boards are configured.
-2. Select role A for `node_a`, choose the ESP USB port, and tap **Connect**. This reads
+2. Use UP/DOWN and OK to choose **ESP-A**, choose its USB port on the next screen,
+   then confirm **Connect ESP-A now**. LEFT goes back one step. This reads
    the identity, backs up an existing configuration, and preserves other roles.
 3. Wait for **A: ready** or **A: HW error**. Both mean USB identification succeeded;
    tap the connection strip for **Devices**, which shows live details for A/B/C.
@@ -191,8 +192,14 @@ firmware fixes. Original BWifiKiller standalone binaries use a different interfa
 | B | `node_b` | Other boards > 433 MHz / CC1101 and RFID / RC522 |
 | C | `node_c` | Other boards > Infrared Receiver |
 
-Set up B and C in the same USB Setup screen. Ports already assigned to another
-role are labelled and disabled. Each connection checks the board's stored device
+Set up B and C through the same three-step USB Setup flow. All choices are
+full-width buttons, with a filled green highlight and automatic scrolling.
+Ports assigned to another role are excluded from the choices and their owners
+are listed. USB choices show the serial endpoint and the end of the stable path
+to distinguish identical bridges. Use Refresh USB ports after plugging in a board.
+Forgetting a saved role requires a separate confirmation. OK always activates
+the highlighted control, including on a keyboard or ESP-A controller; it never
+runs a tool while a different control is selected. Each connection checks the board's stored device
 identity, so a swapped cable cannot silently send A's commands to B. Setup briefly
 pauses all USB workers, preserves the other roles, and reconnects them afterwards.
 An existing configuration is backed up to `nodes.json.bak` before a successful change.

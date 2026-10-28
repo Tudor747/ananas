@@ -350,9 +350,11 @@ def test_five_button_menu_can_run_stop_and_read_without_touch(monkeypatch):
         assert isinstance(controller.selected, tk.Checkbutton)
         controller.handle("ok")
         assert not backend.runs
-        assert "permission" in app.notice.get()
-        controller.handle("select")
         assert app.authorized.get()
+        for _ in range(len(controller.items())):
+            if controller.selected == app.run_button:
+                break
+            controller.handle("down")
         controller.handle("ok")
         assert backend.runs == ["wifi"]
         controller.handle("back")
@@ -424,7 +426,12 @@ def test_native_layout_and_navigation(size, monkeypatch):
         app.show_tool(BY_KEY["usb"])
         root.update()
         assert app.graph is None
-        assert app.run_button.cget("text") == "Connect"
+        assert app.run_button is None
+        assert app.usb_step == "role"
+        app.gpio_navigate("ok")
+        root.update()
+        assert app.usb_step == "port"
+        assert app.body.winfo_height() > 35
         app.show_tool(BY_KEY["arcade"])
         root.update()
         assert len(app.body.winfo_children()) == 12

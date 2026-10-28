@@ -193,9 +193,10 @@ def ui(monkeypatch):
             self.runs = []
         def state(self): return [{"node": n, "connection": "online", "health": "ready"} for n in "ABC"]
         def start(self, key, authorized=False, **kwargs):
-            if not authorized:
+            if key != "usb" and not authorized:
                 raise ValueError("Confirm permission first")
             self.runs.append(key)
+            self.last_options = kwargs
             self.job_id += 1
             self.busy = True
         def stop(self): self.busy = False
@@ -226,6 +227,8 @@ def test_gpio_navigation_page_limits_single_item_and_back(ui):
     app.gpio_navigate("down")
     assert app.controller.selected == app.body.winfo_children()[1]
     app.gpio_navigate("down")
+    assert app.page == 1
+    app.gpio_navigate("up")
     assert app.page == 0
     for _ in range(10):
         app.gpio_navigate("right")
@@ -306,6 +309,71 @@ def test_gpio_setup_failure_leaves_gui_usable(ui, monkeypatch):
     app.body.winfo_children()[0].invoke()
     root.update()
     assert app.category == "System"
+
+
+@pytest.mark.parametrize("size", [(320, 240), (480, 320), (800, 480)])
+def test_usb_setup_entirely_with_buttons(ui, size):
+    app, root, backend = ui
+    root.geometry(f"{size[0]}x{size[1]}")
+    app.ports = [{"port": f"/dev/serial/by-path/usb-socket-{i}", "description": "CP2102"}
+                 for i in range(3)]
+    app.gpio_navigate("ok")  # System
+    app.gpio_navigate("ok")  # USB Setup
+    app.gpio_navigate("down")  # B
+    app.gpio_navigate("ok")
+    assert app.usb_step == "port" and app.role.get() == "B"
+    app.gpio_navigate("down")  # second USB device
+    app.gpio_navigate("ok")
+    assert app.usb_step == "confirm"
+    assert app.selected_port.get() == app.ports[1]["port"]
+    assert not backend.runs
+    root.update()
+    app.gpio_navigate("ok")
+    assert backend.runs == ["usb"]
+    assert backend.last_options["role"] == "B"
+    assert backend.last_options["port"] == app.ports[1]["port"]
+    backend.busy = False
+    backend.messages.put({"kind": "done", "job": backend.job_id, "path": "report.json", "result": {}})
+    app.poll()
+    root.update()
+    assert app.usb_step == "done"
+    app.gpio_navigate("ok")
+    assert app.usb_step == "role"
+
+
+def test_usb_assigned_ports_back_and_disconnected_selection(ui):
+    app, root, backend = ui
+    backend.state = lambda: [{"node": "B", "connection": "online", "port": "/dev/ttyUSB0"}]
+    app.ports = [{"port": f"/dev/ttyUSB{i}", "description": "CP2102"} for i in range(2)]
+    app.gpio_navigate("ok")
+    app.gpio_navigate("ok")
+    app.gpio_navigate("ok")  # A
+    app.gpio_navigate("ok")  # only free USB1
+    assert app.selected_port.get() == "/dev/ttyUSB1"
+    app.gpio_navigate("left")
+    assert app.usb_step == "port"
+    app.gpio_navigate("ok")
+    backend.messages.put({"kind": "choices", "ports": app.ports[:1], "networks": []})
+    app.poll()
+    root.update()
+    assert app.selected_port.get() == "/dev/ttyUSB1"  # Never silently switch to B's port.
+    assert str(app.run_button.cget("state")) == "disabled"
+    app.gpio_navigate("ok")
+    assert not backend.runs
+
+
+def test_usb_forget_requires_confirmation(ui):
+    app, root, backend = ui
+    backend.state = lambda: [{"node": "A", "connection": "online", "port": "/dev/ttyUSB0"}]
+    app.gpio_navigate("ok")
+    app.gpio_navigate("ok")
+    app.gpio_navigate("ok")
+    app.gpio_navigate("down")  # Refresh -> Forget (no detected ports)
+    app.gpio_navigate("ok")
+    assert app.usb_step == "forget" and not backend.runs
+    app.poll()
+    app.gpio_navigate("ok")
+    assert backend.last_options["forget"] is True
 
 
 def test_app_starts_gpio_once_and_stops_it_before_backend_shutdown(ui, monkeypatch):
