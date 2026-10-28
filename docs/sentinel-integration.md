@@ -124,6 +124,13 @@ for aliases of a port already assigned to another node. See the
 Routine unchanged background STATUS records are suppressed to limit idle
 database growth; operator STATUS requests, health changes and failures are retained.
 
+All three configured boards can remain plugged in: each has its own USB worker
+and session. The native tablet runs one foreground tool at a time while maintaining
+all three connections; the transport supports observations on separate nodes at
+the same time. Automated serial fixtures cover simultaneous A/B/C observations,
+event attribution, and B reconnecting while A/C continue answering commands.
+These tests do not verify USB power, cabling, or actual sensor behavior.
+
 ## Screen operation
 
 Open `/console`. It presents two module buttons per page, vertical swipe paging,

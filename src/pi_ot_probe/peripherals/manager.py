@@ -39,7 +39,14 @@ def load_config(path=None):
     raw = json.loads(Path(path).read_text(encoding="utf-8"))
     if not isinstance(raw, list) or len(raw) > 3:
         raise ValueError("node configuration must be a list of at most three entries")
-    nodes = [NodeConfig.model_validate(item) for item in raw]
+    return validate_configs(raw)
+
+
+def validate_configs(configs):
+    """Apply the same identity and endpoint checks to every configuration source."""
+    nodes = [NodeConfig.model_validate(item) for item in configs]
+    if len(nodes) > 3:
+        raise ValueError("node configuration must contain at most three entries")
     for key in ("node", "port", "device"):
         values = [port_key(n.port) if key == "port" else getattr(n, key) for n in nodes]
         if len(set(values)) != len(nodes):
@@ -178,7 +185,9 @@ class NodeWorker:
                 now = time.monotonic()
                 if not identified and now >= hello_deadline:
                     raise TimeoutError("HELLO timed out after 8 seconds of handshake retries")
-                if identified and pending and now >= pending[2]:
+                with self.lock:
+                    stopping = bool(self.queue and self.queue[0][1].command == "STOP")
+                if identified and pending and now >= pending[2] and not stopping:
                     raise TimeoutError(f"{pending[1]} timed out; command was not retried")
                 for frame in decoder.feed(port.read(256)):
                     record = True
@@ -248,7 +257,7 @@ class NodeWorker:
 class NodeManager:
     def __init__(self, configs, store, opener=serial_open):
         self.store = store
-        self.workers = {c.node: NodeWorker(c, store, opener) for c in configs}
+        self.workers = {c.node: NodeWorker(c, store, opener) for c in validate_configs(configs)}
 
     def start(self):
         for worker in self.workers.values():

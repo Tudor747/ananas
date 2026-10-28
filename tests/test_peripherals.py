@@ -1,5 +1,6 @@
 """USB failure isolation and provenance exercised without physical hardware."""
 import json
+import threading
 import time
 
 import pytest
@@ -289,3 +290,95 @@ def test_aliases_for_same_usb_port_cannot_be_assigned_twice(tmp_path):
     ]))
     with pytest.raises(ValueError, match="duplicate.*port"):
         load_config(path)
+
+
+@pytest.mark.parametrize("field", ["node", "port", "device"])
+def test_manager_rejects_duplicate_assignments_without_opening_ports(tmp_path, field):
+    second = config("B").model_dump()
+    second[field] = getattr(config("A"), field)
+    with pytest.raises(ValueError, match=f"duplicate node configuration {field}"):
+        NodeManager([config("A"), NodeConfig(**second)],
+                    EvidenceStore(Repository(tmp_path / "db")),
+                    lambda _: pytest.fail("invalid configuration must not open USB"))
+
+
+def test_stop_preempts_an_already_expired_reply(tmp_path, monkeypatch):
+    from pi_ot_probe.peripherals.manager import NodeWorker
+    clock = [100.0]
+    monkeypatch.setattr("pi_ot_probe.peripherals.manager.time.monotonic", lambda: clock[0])
+    store = EvidenceStore(Repository(tmp_path / "db"))
+    worker = NodeWorker(config(), store)
+    worker.session = "test-session"
+    append = store.append
+
+    def record(node, session, kind, data, provenance="usb"):
+        append(node, session, kind, data, provenance)
+        if kind == "reply" and data["command"] == "HELLO":
+            worker.enqueue(Command(command="STATUS"))
+        elif kind == "sent" and data["command"] == "STATUS":
+            clock[0] += 5
+            worker.enqueue(Command(command="STOP"))
+        elif kind == "reply" and data["command"] == "STOP":
+            worker.stop_event.set()
+
+    monkeypatch.setattr(store, "append", record)
+    port = FakeSerial()
+    worker.connected(port)
+    assert [c["command"] for c in port.commands] == ["HELLO", "STATUS", "STOP"]
+
+
+def test_all_three_observe_concurrently_and_reconnect_independently(tmp_path):
+    rendezvous = threading.Barrier(3)
+
+    class ConcurrentSerial(FakeSerial):
+        def write(self, raw):
+            request = json.loads(raw)
+            if request["command"] == "OBSERVE":
+                # All three workers must enter OBSERVE before any can finish.
+                rendezvous.wait(timeout=3)
+            result = super().write(raw)
+            if request["command"] == "OBSERVE":
+                for payload in ({"sample": self.node}, {"complete": True}):
+                    self.seq += 1
+                    self.buffer.extend(wire(node=self.node, device=f"chip-{self.node}",
+                                            seq=self.seq, session=request["session"],
+                                            id=request["id"], type="event", command="OBSERVE",
+                                            payload={"sensor": request["args"]["sensor"], **payload}))
+            return result
+
+    ports = {f"port-{n}": ConcurrentSerial(n) for n in "ABC"}
+    store = EvidenceStore(Repository(tmp_path / "db"))
+    manager = NodeManager([config(n) for n in "ABC"], store, ports.__getitem__)
+    manager.start()
+    try:
+        wait_until(lambda: all(s["connection"] == "online" for s in manager.state()))
+        sessions = {s["node"]: s["session"] for s in manager.state()}
+        requests = {}
+        for node, sensor in zip("ABC", ("nrf", "cc1101", "ir")):
+            requests[node] = manager.command(node, Command(
+                command="OBSERVE", authorized=True, operator="test", purpose="concurrency",
+                args={"sensor": sensor, "duration_ms": 1000}))
+        wait_until(lambda: sum(e["kind"] == "event" and e["data"]["payload"].get("complete", False)
+                               for e in store.events()) == 3)
+        events = [e for e in store.events() if e["kind"] == "event"]
+        assert len(events) == 6
+        for event in events:
+            assert event["session"] == sessions[event["node"]]
+            assert event["data"]["id"] == requests[event["node"]]
+            assert event["data"]["device"] == f"chip-{event['node']}"
+
+        disconnected = ports["port-B"]
+        ports["port-B"] = ConcurrentSerial("B")
+        disconnected.closed = True
+        wait_until(lambda: manager.state()[1]["connection"] == "offline")
+        for node in "AC":
+            request = manager.command(node, Command(command="STATUS"))
+            wait_until(lambda: any(e["node"] == node and e["kind"] == "reply" and
+                                   e["data"]["id"] == request for e in store.events()))
+        wait_until(lambda: manager.state()[1]["connection"] == "online", timeout=4)
+        assert manager.state()[1]["session"] != sessions["B"]
+        assert all(s["session"] == sessions[s["node"]] for s in manager.state() if s["node"] != "B")
+        assert not any(c["command"] == "OBSERVE" for c in ports["port-B"].commands)
+    finally:
+        manager.stop()
+    assert all(port.closed for port in ports.values())

@@ -231,6 +231,16 @@ def test_pair_requires_a_port_before_stopping_nodes(native, monkeypatch):
     monkeypatch.undo()
 
 
+def test_invalid_configuration_does_not_overwrite_saved_nodes(native):
+    app, _ = native
+    original = app.config_path.read_bytes()
+    duplicate = json.loads(original)[0]
+    with pytest.raises(ValueError, match="duplicate.*device"):
+        app.save_configuration([duplicate, {**duplicate, "node": "B", "port": "other-port"}])
+    assert app.config_path.read_bytes() == original
+    assert not app.config_path.with_suffix(".json.tmp").exists()
+
+
 def test_all_three_nodes_keep_observations_separate(tmp_path):
     class SensorSerial(FakeSerial):
         def write(self, raw):

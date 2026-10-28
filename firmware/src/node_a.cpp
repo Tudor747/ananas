@@ -9,8 +9,10 @@
 #include "app_config.h"
 #include "sentinel_protocol.h"
 
-RF24 radio1(AppConfig::NRF1_CE, AppConfig::NRF1_CSN, AppConfig::NRF_SPI_HZ);
-RF24 radio2(AppConfig::NRF2_CE, AppConfig::NRF2_CSN, AppConfig::NRF_SPI_HZ);
+// Use a conservative bus clock instead of the legacy profile's 16 MHz.
+static constexpr uint32_t NRF_SPI_HZ = 4000000;
+RF24 radio1(AppConfig::NRF1_CE, AppConfig::NRF1_CSN, NRF_SPI_HZ);
+RF24 radio2(AppConfig::NRF2_CE, AppConfig::NRF2_CSN, NRF_SPI_HZ);
 static bool ready1 = false, ready2 = false, active = false, bleInitialized = false;
 static String sensor;
 static uint32_t until = 0, lastSample = 0;
@@ -133,7 +135,16 @@ void hardwarePoll() {
     if (active && (int32_t)(millis() - until) >= 0) finish();
 }
 void setup() {
-    Sentinel::setup(); SPI.begin();
+    Sentinel::setup();
+    // Both radios share MISO: deselect both before either begin() touches SPI.
+    for (uint8_t pin : {AppConfig::NRF1_CSN, AppConfig::NRF2_CSN}) {
+        digitalWrite(pin, HIGH); pinMode(pin, OUTPUT);
+    }
+    for (uint8_t pin : {AppConfig::NRF1_CE, AppConfig::NRF2_CE}) {
+        digitalWrite(pin, LOW); pinMode(pin, OUTPUT);
+    }
+    SPI.begin();
+    delay(100); // Allow both module supplies to settle before probing registers.
     ready1 = radio1.begin(); ready2 = radio2.begin(); hardwareStop();
 }
 void loop() { Sentinel::poll(); delay(1); }

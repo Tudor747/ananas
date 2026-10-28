@@ -27,6 +27,11 @@ GPIO numbers are not physical header positions.
 | Radio 1: CE / CSN | 5 / 17 |
 | Radio 2: CE / CSN | 16 / 4 |
 
+The node A profile uses a 4 MHz SPI clock, holds both radios deselected before
+initialization, and allows 100 ms for their supplies to settle. These startup
+changes require rebuilding and uploading `node_a`; updating the Pi application
+or changing `nodes.json` does not update the ESP firmware.
+
 Check for solder bridges, correct module orientation and common ground. Verify
 the supply voltage required by the actual module/adapter and its regulator;
 do not infer power pins from the GPIO table. Attach the intended antennas before

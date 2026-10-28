@@ -20,7 +20,7 @@ from pi_ot_probe.collectors.nmap import find_nmap, parse_nmap_xml
 from pi_ot_probe.collectors.targets import validate_target
 from pi_ot_probe.collectors.wifi import discover_wifi
 from pi_ot_probe.database.repository import Repository
-from pi_ot_probe.peripherals.manager import NodeManager, load_config, port_key
+from pi_ot_probe.peripherals.manager import NodeManager, load_config, port_key, validate_configs
 from pi_ot_probe.peripherals.protocol import Command, NodeConfig
 from pi_ot_probe.peripherals.store import EvidenceStore
 from .catalog import BY_KEY
@@ -291,10 +291,6 @@ class TabletBackend:
             if identified.node != role or port_key(identified.port) != port_key(port):
                 raise ValueError("USB identity result does not match the selected role and port")
             current = [c for c in current if c.node != role] + [identified]
-            for field in ("port", "device"):
-                values = [port_key(c.port) if field == "port" else c.device for c in current]
-                if len(set(values)) != len(current):
-                    raise ValueError(f"This {field} is already assigned to another role.")
             self._check_cancelled()
             self.save_configuration(current)
             return identified.model_dump()
@@ -318,6 +314,7 @@ class TabletBackend:
 
     def save_configuration(self, configs):
         """Called with USB workers stopped, before reconnecting the saved roles."""
+        configs = validate_configs(configs)
         self.config_path.parent.mkdir(parents=True, exist_ok=True)
         if self.config_path.exists():
             self.config_path.with_suffix(".json.bak").write_bytes(self.config_path.read_bytes())

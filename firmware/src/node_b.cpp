@@ -5,7 +5,10 @@
 #include "sentinel_pins.h"
 #include "sentinel_protocol.h"
 
-CC1101 radio = new Module(SENTINEL_CC_CS, SENTINEL_CC_GDO0, RADIOLIB_NC, RADIOLIB_NC);
+// The application owns this bus because RC522 shares it. The default Module
+// constructor lets RadioLib end SPI when CC1101 detection fails.
+CC1101 radio = new Module(SENTINEL_CC_CS, SENTINEL_CC_GDO0, RADIOLIB_NC, RADIOLIB_NC,
+                         SPI, SPISettings(2000000, MSBFIRST, SPI_MODE0));
 MFRC522 rfid(SENTINEL_RFID_CS, SENTINEL_RFID_RST);
 static bool ccReady = false, rfidReady = false, active = false;
 static String sensor;
