@@ -195,10 +195,14 @@ class NodeWorker:
                     raise TimeoutError(f"{pending[1]} timed out; command was not retried")
                 for frame in decoder.feed(port.read(256)):
                     record = True
-                    if frame.node != self.config.node or frame.device != self.config.device:
-                        raise ValueError("USB identity does not match configured node/device")
+                    status_details = {}
                     if frame.session != self.session:
                         continue  # Buffered reply from an earlier connection.
+                    if frame.node != self.config.node or frame.device != self.config.device:
+                        raise ValueError(
+                            f"USB identity mismatch on {self.config.port}: expected ESP-{self.config.node} "
+                            f"chip {self.config.device}, received ESP-{frame.node} chip {frame.device}. "
+                            "Run USB Setup > Find & connect; verify the firmware profile if the physical board differs.")
                     if not identified:
                         if frame.type != "reply" or frame.command != "HELLO" or frame.id != hello_id:
                             continue
@@ -223,6 +227,9 @@ class NodeWorker:
                             last_status = status
                         pending = None
                         next_heartbeat = now + 1
+                        if frame.command in {"HELLO", "STATUS"}:
+                            hardware = frame.payload.get("hardware", {})
+                            status_details["hardware"] = dict(hardware) if isinstance(hardware, dict) else {}
                     elif frame.command == "INPUT":
                         if (frame.node != "A" or frame.id != 0 or set(frame.payload) != {"action"} or
                                 not isinstance(frame.payload["action"], str) or
@@ -237,7 +244,7 @@ class NodeWorker:
                     # Keep health changes and operator requests, not identical idle heartbeats.
                     if record:
                         self.store.append(self.config.node, self.session, frame.type, frame.model_dump())
-                    self.update(health=frame.health, last_seq=last_seq, last_seen=time.time(), error=None)
+                    self.update(health=frame.health, last_seq=last_seq, last_seen=time.time(), error=None, **status_details)
                 if decoder.rejected != rejected:
                     self.store.append(self.config.node, self.session, "malformed_frame",
                                       {"count": decoder.rejected - rejected}, "host")

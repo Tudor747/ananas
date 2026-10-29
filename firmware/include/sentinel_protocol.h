@@ -76,6 +76,9 @@ inline void handle() {
         result["role"] = role;
         result["hardware_verified"] = false;
         result["mode"] = "pi_controlled";
+        // Optional, read-only peripheral initialization details. Older firmware
+        // remains compatible; a failed peripheral is separate from USB identity.
+        hardwareCommand("STATUS", doc["args"].as<JsonObjectConst>(), result);
     } else if (!strcmp(cmd, "STOP")) {
         hardwareStop(); result["stopped"] = true;
     } else {

@@ -56,6 +56,7 @@ def test_startup_keeps_event_loop_alive(monkeypatch, tmp_path, failure):
             observed.append("app")
             root.finished = True
         def close_gpio(self): pass
+        def close_power_switch(self): pass
 
     monkeypatch.setattr(tk, "Tk", lambda: root)
     monkeypatch.setattr(tk, "Label", Label)

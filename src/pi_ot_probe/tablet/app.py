@@ -14,6 +14,7 @@ from .catalog import BY_KEY, CATEGORIES, NODE_NAMES, TOOLS, category_tools
 from .diagnostics import discover_choices
 from .controller import Controller
 from .gpio_buttons import GPIOButtons
+from .power_switch import PowerSwitch
 from .presentation import connection_summary, describe_node, format_result, pretty_record
 from .wifi_view import WifiResults
 
@@ -25,7 +26,7 @@ ACCENT = "#4ee3b3"
 ERROR = "#ffb5a5"
 logger = logging.getLogger(__name__)
 
-GRAPH_ACTIONS = {"wifi", "radar", "channels", "sentinel", "ble", "bt_analyzer",
+GRAPH_ACTIONS = {"packet_watch", "deauth_watch", "wifi", "radar", "channels", "sentinel", "ble", "bt_analyzer",
                  "bt_spectrum", "nrf", "scope", "sweep", "advisor", "coex"}
 
 
@@ -33,8 +34,11 @@ class TabletApp:
     def __init__(self, root, backend, fullscreen=True, size=None, enable_gpio=None):
         self.root, self.backend = root, backend
         self.gpio_buttons = None
+        self.power_switch = None
+        self.switch_enabled = True
         self.gpio_requested = sys.platform == "linux" if enable_gpio is None else enable_gpio
         self._gpio_retry_at = 0
+        self._switch_retry_at = 0
         self.usb_step = "start"
         self._menu_refresh_id = None
         root.title("RF Sentinel · Tablet")
@@ -58,6 +62,7 @@ class TabletApp:
         self.selected_port = tk.StringVar(root)
         self.role = tk.StringVar(root, "A")
         self.target = tk.StringVar(root)
+        self.chat_message = tk.StringVar(root, "RF Sentinel lab")
         self.authorized = tk.BooleanVar(root, False)
         self.press_y = 0
         self.closing = False
@@ -99,6 +104,22 @@ class TabletApp:
         self.home()
         self.refresh_choices()
         self.poll()
+        self.root.after(2000, self._park_cursor)
+
+    def _park_cursor(self):
+        """Move the mouse pointer to the bottom-left of the TFT."""
+        if self.closing:
+            return
+        try:
+            self.root.event_generate(
+                "<Motion>",
+                warp=True,
+                x=2,
+                y=max(0, self.root.winfo_height() - 3)
+            )
+            logger.info("Mouse cursor moved to bottom-left")
+        except Exception:
+            logger.exception("Mouse cursor positioning failed")
 
     def start_gpio(self):
         if self.closing or (self.gpio_buttons is not None and self.gpio_buttons.active):
@@ -111,8 +132,102 @@ class TabletApp:
         except Exception as exc:
             logger.warning("GPIO initialization failed; keyboard/touch remain available: %s", exc)
 
+    def start_power_switch(self):
+        if self.closing or (self.power_switch is not None and self.power_switch.active):
+            return
+        self.close_power_switch()
+        self._switch_retry_at = time.monotonic() + 5
+        try:
+            self.power_switch = PowerSwitch(self.root, self.on_power_switch)
+            logger.info("GPIO16 software ON/OFF switch activated")
+        except Exception as exc:
+            logger.warning("GPIO16 unavailable; app remains usable: %s", exc)
+
+    def _set_standby_visual(self, enabled):
+        """Black software standby overlay for the TFT."""
+        overlay = getattr(self, "_standby_overlay", None)
+
+        if enabled:
+            if overlay is not None:
+                overlay.destroy()
+                self._standby_overlay = None
+            return
+
+        if overlay is None or not overlay.winfo_exists():
+            overlay = tk.Frame(
+                self.root,
+                bg="#000000",
+                bd=0,
+                highlightthickness=0
+            )
+            overlay.place(
+                relx=0,
+                rely=0,
+                relwidth=1,
+                relheight=1
+            )
+            self._standby_overlay = overlay
+
+        overlay.lift()
+
+    def _gpio16_reboot(self):
+        """Reboot only after a real OFF -> ON transition."""
+        if self.closing or not self.switch_enabled:
+            return
+
+        import subprocess
+        import threading
+
+        def work():
+            try:
+                result = subprocess.run(
+                    ["sudo", "-n", "/usr/sbin/reboot"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+                if result.returncode:
+                    logger.error(
+                        "GPIO16 reboot failed: %s",
+                        result.stderr
+                    )
+            except Exception:
+                logger.exception("GPIO16 reboot failed")
+
+        threading.Thread(
+            target=work,
+            name="gpio16-reboot",
+            daemon=True
+        ).start()
+
+    def on_power_switch(self, enabled):
+        if self.closing or self.switch_enabled == enabled:
+            return
+        self.switch_enabled = enabled
+        self.backend.set_power_enabled(enabled)
+        self._set_standby_visual(enabled)
+        if enabled:
+            if getattr(self, "_reboot_armed", False):
+                self._reboot_armed = False
+                self.notice.set("Switch ON: restarting Raspberry Pi...")
+                self.root.after(2000, self._gpio16_reboot)
+            else:
+                self.notice.set("Switch ON: ready.")
+        else:
+            self._reboot_armed = True
+            self.notice.set("Switch OFF: standby active.")
+        logger.info("GPIO16 switch: %s", "ON" if enabled else "OFF")
+
+    def close_power_switch(self):
+        if self.power_switch is not None:
+            try:
+                self.power_switch.close()
+            except Exception:
+                logger.exception("GPIO16 cleanup failed")
+            self.power_switch = None
+
     def gpio_navigate(self, direction):
-        if not self.closing:
+        if not self.closing and self.switch_enabled:
             self.controller.navigate_gpio(direction)
 
     def close_gpio(self):
@@ -275,6 +390,10 @@ class TabletApp:
             return
         content = self.scroll_area()
         self.label(content, tool.description, MUTED)
+        if tool.action == "nrf_chat":
+            self.label(content, "Message (1-24 UTF-8 bytes):", MUTED)
+            tk.Entry(content, textvariable=self.chat_message, bg=PANEL,
+                     fg=TEXT, insertbackground=TEXT, relief="flat").pack(fill="x", pady=3)
         if not tool.action:
             self.label(content, tool.unavailable, ERROR)
             self.button(self.footer, "Back to tools", self.back).pack(fill="x")
@@ -419,6 +538,11 @@ class TabletApp:
     def run_tool(self, **options):
         if not self.tool:
             return
+        if self.tool.action == "nrf_chat":
+            options["message"] = self.chat_message.get()
+        if not self.switch_enabled:
+            self.notice.set("Switch OFF: move switch to ON to run tools.")
+            return
         try:
             self.backend.start(self.tool.key, authorized=self.authorized.get(), target=self.target.get(),
                                port=self.selected_port.get(), role=self.role.get(), **options)
@@ -469,6 +593,27 @@ class TabletApp:
             graph.create_text(10, 18, anchor="nw", fill=MUTED, text="Measurements appear here", font=("DejaVu Sans", 10))
             return
         action = self.tool.action
+        if action in {"packet_watch", "deauth_watch"}:
+            rows = [r for r in self.samples if "total_packets" in r][-24:]
+            if not rows:
+                graph.create_text(10, 18, anchor="nw", fill=MUTED,
+                                  text="Waiting for passive Wi-Fi frame counts...")
+                return
+            scale = max(1, max(int(row.get("total_packets", 0)) for row in rows))
+            step = (width - 20) / max(1, len(rows))
+            for i, row in enumerate(rows):
+                x = 10 + i * step
+                total = max(0, int(row.get("total_packets", 0)))
+                deauth = max(0, int(row.get("deauth_frames", 0)))
+                bar_height = total * 90 / scale
+                graph.create_rectangle(x, 115 - bar_height, x + max(2, step - 2), 115,
+                                       fill=ACCENT, outline="")
+                if deauth:
+                    graph.create_rectangle(x, 115 - deauth * 90 / scale,
+                                           x + max(2, step - 2), 115,
+                                           fill="#ffb5a5", outline="")
+            graph.create_text(8, 5, anchor="nw", text="Frames / 500 ms (red: deauth)", fill=MUTED)
+            return
         if action in {"channels", "bt_spectrum"}:
             from .backend import summarize
             summary = summarize(action, self.samples)
@@ -535,8 +680,11 @@ class TabletApp:
         if (self.gpio_requested and time.monotonic() >= self._gpio_retry_at and
                 (self.gpio_buttons is None or not self.gpio_buttons.active)):
             self.start_gpio()
+        if (self.gpio_requested and time.monotonic() >= self._switch_retry_at and
+                (self.power_switch is None or not self.power_switch.active)):
+            self.start_power_switch()
         states = self.backend.state()
-        self.status.set(connection_summary(states))
+        self.status.set(connection_summary(states) if self.switch_enabled else "Switch OFF - operations paused")
         trouble = any(s.get("health") == "error" or s["connection"] == "offline" for s in states)
         self.status_label.configure(fg=ERROR if trouble else ACCENT)
         if self.tool and self.tool.node:
@@ -633,7 +781,8 @@ class TabletApp:
         if self.forget_button:
             self.forget_button.configure(state="disabled" if self.backend.busy else "normal")
         for action in getattr(self.backend, "button_actions", lambda: [])():
-            self.controller.handle(action)
+            if self.switch_enabled:
+                self.controller.handle(action)
 
     def memory_game(self):
         values = list("ABCDEF") * 2
@@ -679,6 +828,7 @@ class TabletApp:
         if self.closing:
             return
         self.closing = True
+        self.close_power_switch()
         self.close_gpio()
         if self._menu_refresh_id is not None:
             self.root.after_cancel(self._menu_refresh_id)

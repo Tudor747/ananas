@@ -23,6 +23,9 @@ manual verification. IR output is disabled in the default build.
 
 **Start here:** [test the dual 2.4 GHz PCB and launch on Raspberry Pi](docs/first-pcb-test.md).
 
+For “this board is ESP-B/C, not ESP-A” or “HW error”, see
+[USB identity and per-radio checks](docs/esp-usb-troubleshooting.md).
+
 | Your board | App role | PlatformIO profile in `firmware/` |
 | --- | --- | --- |
 | ESP1: two nRF24L01+ radios | A | `node_a` |

@@ -1,0 +1,18 @@
+{
+  "base_commit": "397688ad3f1d6db021fa9836263767eb76a6223c",
+  "sha256": {
+    "docs/tablet-app.md": "a4a95ad42f61febab0305403e97f3ecb9981ea8e0597c2004513b14725345878",
+    "run-tablet.sh": "78aa846f30d90e70c82e48427cd009d82610d2fa265d170af4c234904080d329",
+    "scripts/setup-tablet.sh": "df95fd4bfb22c085767914f02931f6c4ed79c4fd57ded46daae356dedecf446f",
+    "scripts/tablet-support.sh": "406aba1efe278a9f0bef6b2220694059591cb475103ff86bf91a6d1f418a17ac",
+    "src/pi_ot_probe/peripherals/manager.py": "d507721665f08596573585e1a2b66a598aa0b7d27bb30605f6d391b91065a43a",
+    "src/pi_ot_probe/peripherals/ports.py": "22d3f4b3815a4986124fc08d7bcd552618b2d3fb212e4e5e13b3767e47fd6b9f",
+    "src/pi_ot_probe/peripherals/provision.py": "2c47119eb322a0794b0cd2ffcfa3c673b81e0d4313d750629807e858103d9d04",
+    "src/pi_ot_probe/tablet/__main__.py": "b4a0268c9a047fb03e93851098ed476a0e5714cf82fd216af2b4482478ee5578",
+    "src/pi_ot_probe/tablet/app.py": "28505df352a0532de1a1ff051018fc81f4883785e0ce660359bd80a7386e470a",
+    "src/pi_ot_probe/tablet/backend.py": "0c6124c0deebad177856d2153dfb2e1a5843f738e67b9d65d2387ee9ee33f1eb",
+    "src/pi_ot_probe/tablet/controller.py": "b27471fcf174286a230d53d2e4851b51fdd27f0f745a8d0d1a7b8294a2e8a7f9",
+    "src/pi_ot_probe/tablet/diagnostics.py": "26a9631a1cae24e25d95fd3adca300aa27d9b45f726499467e80cbbbb25ce2ec",
+    "src/pi_ot_probe/tablet/gpio_buttons.py": "ac7dd929a1aa0f05d00944382a48d138793be6ff8ad8e047cb95a2c96c4c410b"
+  }
+}

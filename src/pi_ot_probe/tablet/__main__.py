@@ -118,6 +118,7 @@ def main(argv=None):
         abandoned.set()
         try:
             if window is not None:
+                window.close_power_switch()
                 window.close_gpio()
         finally:
             if backend is None:

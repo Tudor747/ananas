@@ -24,6 +24,18 @@ def describe_node(state):
         lines.append(f"USB connected · hardware {state.get('health', 'unknown')}")
         if state.get("health") == "error":
             lines.append("A peripheral failed its check. Other sensors may still work.")
+        hardware = state.get("hardware", {})
+        for key, label in (("nrf1_spi", "nRF radio 1"), ("nrf2_spi", "nRF radio 2"),
+                           ("cc1101_spi", "CC1101 433 MHz"), ("rc522_spi", "RC522 RFID")):
+            if key in hardware:
+                lines.append(f"{label}: " + ("SPI check passed" if hardware[key] is True else "SPI check failed"))
+        if state.get("health") == "error":
+            if not hardware:
+                lines.append("This firmware gives no per-radio details. Update this board's matching firmware profile.")
+            elif role == "A":
+                lines.append("Check both nRF modules, 3.3 V supply, shared ground and CE/CSN/SPI wiring; Wi-Fi/BLE can still work.")
+            elif role == "B":
+                lines.append("CC1101 and RC522 are checked separately. An absent RC522 does not prevent a working CC1101 scan.")
     elif connection == "unconfigured":
         lines.append("Not set up yet. Open USB Setup and choose this role.")
     else:
@@ -97,6 +109,16 @@ def format_result(result):
         return "\n\n".join(lines)
     if result.get("unconfigured"):
         return f"ESP-{result['node']} setup forgotten. Choose its current USB port and tap Connect."
+    if "connected" in result:
+        lines = [f"ESP-{c['node']} ({NODE_NAMES[c['node']]})\n  USB: {c['port']}\n  Chip: {c['device']}"
+                 for c in result["connected"]]
+        if not any(c["node"] == "A" for c in result["connected"]):
+            lines.append("No ESP-A firmware identified. The dual-nRF board needs node_a; changing its USB socket will not change its role.")
+        if result.get("replaced_assignments"):
+            lines.append("Replaced stale assignments: " + ", ".join(f"ESP-{c['node']}" for c in result["replaced_assignments"]) +
+                         ". Previous configuration saved in nodes.json.bak.")
+        lines.extend(result.get("unidentified", []))
+        return "\n\n".join(lines)
     if "nodes" in result:
         text = "\n\n".join(describe_node(s) for s in result["nodes"])
         if result.get("configuration_error"):

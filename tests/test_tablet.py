@@ -103,7 +103,9 @@ def test_unavailable_tools_cannot_dispatch(native):
                 app.start(tool.key, authorized=True)
     assert not any(c["command"] in {"OBSERVE", "TRANSMIT"} for c in port.commands[count:])
     assert "Illegal" in CATEGORIES
-    assert len([t for t in TOOLS if t.category == "Illegal"]) == 8
+    assert len([t for t in TOOLS if t.category == "Illegal"]) == 11
+    assert BY_KEY["deauther"].action == "deauth_watch"
+    assert BY_KEY["jammer"].action == "channels"
 
 
 def test_summaries_use_unique_devices_and_sample_denominators():

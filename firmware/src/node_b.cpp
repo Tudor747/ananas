@@ -21,6 +21,11 @@ void hardwareStop() {
     active = false;
 }
 bool hardwareCommand(const char* cmd, JsonObjectConst args, JsonObject result) {
+    if (!strcmp(cmd, "STATUS")) {
+        auto hw = result.createNestedObject("hardware");
+        hw["cc1101_spi"] = ccReady; hw["rc522_spi"] = rfidReady;
+        return true;
+    }
     if (strcmp(cmd, "OBSERVE") || !args["sensor"].is<const char*>() || !args["duration_ms"].is<uint32_t>()) return false;
     uint32_t duration = args["duration_ms"];
     String chosen = args["sensor"].as<String>();

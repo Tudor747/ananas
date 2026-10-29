@@ -20,9 +20,11 @@ def main():
         "src/pi_ot_probe/collectors/wifi.py", "tests/test_wifi_views.py",
         "tests/test_gpio_navigation.py", "tests/test_tablet_results.py", "tests/web/test_wifi_and_reports.py",
         "tests/conftest.py", "docs/scan-results-audit.md",
+        "docs/esp-usb-troubleshooting.md", "tests/test_usb_setup.py", "tests/test_tablet_startup.py",
     )]
     paths.extend(sorted((root / "firmware/include").glob("*.h")))
-    paths.extend(sorted((root / "src/pi_ot_probe/tablet").glob("*.py")))
+    paths.extend(p for p in sorted((root / "src/pi_ot_probe/tablet").glob("*.py"))
+                 if "_before_" not in p.name and "_backup_" not in p.name)
     paths.extend(sorted((root / "src/pi_ot_probe/peripherals").glob("*.py")))
     destination = root / "dist/rf-sentinel-tablet-update.tar.gz"
     destination.parent.mkdir(exist_ok=True)

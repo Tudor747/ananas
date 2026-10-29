@@ -9,7 +9,10 @@ import pytest
 from pi_ot_probe.peripherals import ports, provision
 from pi_ot_probe.peripherals.manager import NodeWorker
 from pi_ot_probe.tablet.backend import TabletBackend
-from tests.test_peripherals import FakeSerial, config
+from tests.test_peripherals import FakeSerial, config, wire, wait_until
+from pi_ot_probe.database.repository import Repository
+from pi_ot_probe.peripherals.store import EvidenceStore
+from pi_ot_probe.tablet.presentation import describe_node, format_result
 
 
 def test_identification_tries_roles_without_observing_or_transmitting():
@@ -157,3 +160,86 @@ def test_stop_does_not_hold_ui_and_new_job_waits_for_stop(backend, monkeypatch):
     finally:
         release.set()
         backend._stop_thread.join()
+
+
+def test_stale_other_role_frame_does_not_break_fresh_identification(tmp_path):
+    port = FakeSerial()
+    port.buffer.extend(wire(node="C", device="chip-C", session="old-provisioning-session"))
+    worker = NodeWorker(config(), EvidenceStore(Repository(tmp_path / "e.db")), lambda _: port)
+    worker.start()
+    try:
+        wait_until(lambda: worker.snapshot()["connection"] == "online")
+        assert worker.snapshot()["error"] is None
+        assert len([c for c in port.commands if c["command"] == "HELLO"]) == 1
+    finally:
+        worker.stop()
+
+
+def test_hardware_failure_is_reported_per_radio_while_usb_stays_online(tmp_path):
+    class Board(FakeSerial):
+        def write(self, raw):
+            request = json.loads(raw)
+            self.commands.append(request)
+            self.seq += 1
+            self.buffer.extend(wire(seq=self.seq, session=request["session"], id=request["id"],
+                                    command=request["command"], health="error",
+                                    payload={"hardware": {"nrf1_spi": True, "nrf2_spi": False}}))
+            return len(raw)
+    port = Board()
+    worker = NodeWorker(config(), EvidenceStore(Repository(tmp_path / "hw.db")), lambda _: port)
+    worker.start()
+    try:
+        wait_until(lambda: worker.snapshot().get("hardware", {}).get("nrf2_spi") is False)
+        state = worker.snapshot()
+        assert state["connection"] == "online" and state["health"] == "error"
+        text = describe_node(state)
+        assert "nRF radio 1: SPI check passed" in text and "nRF radio 2: SPI check failed" in text
+        assert "USB connected" in text
+    finally:
+        worker.stop()
+
+
+def test_role_mismatch_explains_firmware_instead_of_relabelling(monkeypatch, capsys):
+    port = FakeSerial("C")
+    monkeypatch.setattr(provision, "serial_open", lambda _: port)
+    monkeypatch.setattr("sys.argv", ["provision", "--node", "A", "--port", "usb-nrf"])
+    assert provision.main() == 1
+    message = json.loads(capsys.readouterr().out)["error"]
+    assert "ESP-C, not ESP-A" in message and "node_a" in message
+    assert "chip-C" in message and "usb-nrf" in message
+    assert port.closed and {r["command"] for r in port.commands} == {"HELLO"}
+
+
+def test_inspect_reports_firmware_identity_without_changing_configuration(monkeypatch, capsys):
+    port = FakeSerial("B")
+    monkeypatch.setattr(provision, "serial_open", lambda _: port)
+    monkeypatch.setattr("sys.argv", ["provision", "--node", "auto", "--port", "usb-433", "--inspect"])
+    assert provision.main() == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["node"] == "B" and result["device"] == "chip-B"
+    assert result["firmware"] == "test-fixture" and result["health"] == "ready"
+
+
+def test_find_replaces_stale_port_assignment_but_preserves_unrelated_board(backend, monkeypatch):
+    old = [{"node": "A", "port": "usb0", "device": "old-A"},
+           {"node": "C", "port": "absent-C", "device": "chip-C"}]
+    backend.config_path.write_text(json.dumps(old))
+    monkeypatch.setattr("pi_ot_probe.tablet.backend.serial_ports", lambda: [{"port": "usb0"}])
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
+        a, 0, json.dumps({"node": "B", "port": "usb0", "device": "chip-B"})))
+    result = backend.pair_all()
+    saved = json.loads(backend.config_path.read_text())
+    assert {c["node"] for c in saved} == {"B", "C"}
+    assert result["replaced_assignments"] == [old[0]]
+    assert json.loads(backend.config_path.with_suffix(".json.bak").read_text()) == old
+    text = format_result(result)
+    assert "No ESP-A firmware" in text and "Replaced stale assignments: ESP-A" in text
+
+
+def test_unused_standby_does_not_touch_usb_on_shutdown(monkeypatch):
+    from pi_ot_probe.tablet.usb_standby import USBStandby
+    calls = []
+    monkeypatch.setattr(USBStandby, "_power", staticmethod(lambda state: calls.append(state)))
+    standby = USBStandby(SimpleNamespace())
+    standby.shutdown()
+    assert calls == [] and not standby.thread.is_alive()

@@ -4,7 +4,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 
 MAX_FRAME = 4096
-ROLES = {"A": {"nrf", "wifi", "ble"}, "B": {"cc1101", "rfid"}, "C": {"ir"}}
+ROLES = {"A": {"nrf", "wifi", "ble", "packets", "deauth", "beacon_lab", "ble_ad_lab"}, "B": {"cc1101", "rfid"}, "C": {"ir"}}
 BUTTON_ACTIONS = {"up", "down", "back", "select", "ok"}
 
 
@@ -91,6 +91,12 @@ class Command(BaseModel):
             if node != "A" or set(self.args) != {"channel"} or type(self.args["channel"]) is not int or not 0 <= self.args["channel"] <= 125:
                 raise ValueError("only node A nRF channel 0–125 is configurable")
         elif node == "A" and self.args == {"test": "nrf_link"}:
+            return
+        elif (node == "A" and self.command == "TRANSMIT"
+              and set(self.args) == {"test", "message"}
+              and self.args.get("test") == "nrf_chat_loopback"
+              and isinstance(self.args.get("message"), str)
+              and 1 <= len(self.args["message"].encode("utf-8")) <= 24):
             return
         elif node != "C" or set(self.args) != {"code"} or type(self.args["code"]) is not int or not 0 <= self.args["code"] <= 0xFFFFFFFF:
             raise ValueError("only a single nRF peer test or 32-bit NEC IR code is supported")

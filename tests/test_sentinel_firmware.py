@@ -43,13 +43,14 @@ inline void pinMode(int pin, int mode) { pin_modes[pin] = mode; if (mode == INPU
 inline int digitalRead(int pin) { return pin_levels[pin]; }
 inline struct SPIClass { void begin() {} } SPI;
 constexpr int RF24_1MBPS = 1, RF24_PA_MIN = 0, RF24_CRC_16 = 2;
+inline int missing_ce = -1;
 class RF24 {
 public:
-    int speed;
-    RF24(int, int, int hz) : speed(hz) {}
+    int speed, ce;
+    RF24(int pin, int, int hz) : speed(hz), ce(pin) {}
     bool begin() {
         // Model shared-bus contention and a module requiring a slower clock.
-        return speed <= 4000000 && clock_ms >= 100 &&
+        return ce != missing_ce && speed <= 4000000 && clock_ms >= 100 &&
                pin_modes[17] == OUTPUT && pin_levels[17] == HIGH &&
                pin_modes[4] == OUTPUT && pin_levels[4] == HIGH &&
                pin_modes[5] == OUTPUT && pin_levels[5] == LOW &&
@@ -63,13 +64,23 @@ public:
     bool write(const uint8_t*, size_t) { return true; }
     bool available() { return false; } bool testRPD() { return false; }
 };
-constexpr int WIFI_OFF = 0, WIFI_STA = 1, WIFI_SCAN_RUNNING = -1, WIFI_SCAN_FAILED = -2;
+constexpr int WIFI_OFF = 0, WIFI_STA = 1, WIFI_AP = 2, WIFI_SCAN_RUNNING = -1, WIFI_SCAN_FAILED = -2;
+using portMUX_TYPE = int;
+constexpr int portMUX_INITIALIZER_UNLOCKED = 0, ESP_OK = 0, WIFI_SECOND_CHAN_NONE = 0;
+inline void portENTER_CRITICAL(int*) {} inline void portEXIT_CRITICAL(int*) {}
+inline void portENTER_CRITICAL_ISR(int*) {} inline void portEXIT_CRITICAL_ISR(int*) {}
+enum wifi_promiscuous_pkt_type_t { WIFI_PKT_MGMT, WIFI_PKT_DATA };
+struct wifi_promiscuous_pkt_t { struct { int sig_len; } rx_ctrl; uint8_t payload[128]; };
+inline int esp_wifi_set_promiscuous(bool) { return ESP_OK; }
+inline void esp_wifi_set_promiscuous_rx_cb(void (*)(void*, wifi_promiscuous_pkt_type_t)) {}
+inline int esp_wifi_set_channel(int, int) { return ESP_OK; }
 enum wifi_auth_mode_t { WIFI_AUTH_OPEN, WIFI_AUTH_WEP, WIFI_AUTH_WPA_PSK,
     WIFI_AUTH_WPA2_PSK, WIFI_AUTH_WPA_WPA2_PSK, WIFI_AUTH_WPA2_ENTERPRISE,
     WIFI_AUTH_WPA3_PSK, WIFI_AUTH_WPA2_WPA3_PSK };
 inline struct WiFiClass {
     int scan_result = WIFI_SCAN_RUNNING;
     void mode(int) {} void scanDelete() {}
+    bool softAP(const char*, const char*, int, bool, int) { return true; }
     int scanNetworks(bool async, bool hidden, bool passive, int dwell) {
         assert(async && hidden && passive && dwell == 500);
         return WIFI_SCAN_RUNNING;
@@ -96,12 +107,18 @@ struct BLEScan {
     bool start(unsigned, void (*)(BLEScanResults), bool) { return true; }
     BLEScanResults getResults() { return {}; }
 };
+struct BLEAdvertisementData { void setFlags(int) {} void setName(const char*) {} };
+struct BLEAdvertising {
+    void stop() {} void start() {} void setAdvertisementData(BLEAdvertisementData) {}
+    void setScanResponse(bool) {} void setMinInterval(int) {} void setMaxInterval(int) {}
+};
 struct BLEDevice {
     static void init(const char*) {}
     static BLEScan* getScan() { static BLEScan scan; return &scan; }
+    static BLEAdvertising* getAdvertising() { static BLEAdvertising advertising; return &advertising; }
 };
 ''', encoding="utf-8")
-    for name in ("Arduino.h", "SPI.h", "RF24.h", "WiFi.h", "esp_wifi.h", "BLEDevice.h", "BLEScan.h"):
+    for name in ("Arduino.h", "SPI.h", "RF24.h", "WiFi.h", "esp_wifi.h", "BLEDevice.h", "BLEScan.h", "BLEAdvertising.h"):
         (folder / name).write_text('#include "mock_hardware.h"\n', encoding="utf-8")
     (folder / "sentinel_protocol.h").write_text(r'''
 #include "mock_hardware.h"
@@ -123,10 +140,18 @@ const char* hardwareHealth();
 bool hardwareCommand(const char*, JsonObjectConst, JsonObject);
 void hardwarePoll();
 int main(int argc, char** argv) {
-    setup();
-    assert(std::string(hardwareHealth()) == "ready");
     std::string scenario = argv[1];
+    if (scenario == "nrf1_missing") missing_ce = 5;
+    if (scenario == "nrf2_missing") missing_ce = 16;
+    setup();
     StaticJsonDocument<512> args, result;
+    if (scenario == "status" || missing_ce != -1) {
+        assert(hardwareCommand("STATUS", args.as<JsonObjectConst>(), result.to<JsonObject>()));
+        result["health"] = hardwareHealth();
+        serializeJson(result, std::cout);
+        return 0;
+    }
+    assert(std::string(hardwareHealth()) == "ready");
     args["sensor"] = scenario == "ble_late" ? "ble" : "wifi";
     args["duration_ms"] = 100;
     if (!hardwareCommand("OBSERVE", args.as<JsonObjectConst>(), result.to<JsonObject>())) return 2;
@@ -142,6 +167,16 @@ int main(int argc, char** argv) {
                     str(ROOT / "firmware/src/node_a.cpp"), "-o", str(binary)],
                    check=True, capture_output=True, text=True, timeout=60)
     return binary
+
+
+@pytest.mark.parametrize("scenario,first,second", [("status", True, True), ("nrf1_missing", False, True), ("nrf2_missing", True, False)])
+def test_firmware_reports_each_radio_initialization(node_a_binary, scenario, first, second):
+    reply = subprocess.run([str(node_a_binary), scenario], capture_output=True, text=True, check=True, timeout=5)
+    result = json.loads(reply.stdout)
+    assert result["hardware"]["nrf1_spi"] is first
+    assert result["hardware"]["nrf2_spi"] is second
+    assert result["hardware"]["nrf1_ce"] == 5 and result["hardware"]["nrf2_csn"] == 4
+    assert result["health"] == ("ready" if first and second else "error")
 
 
 @pytest.mark.parametrize("scenario,field,expected", [("ble_late", "name", ["Cached BLE result"]),

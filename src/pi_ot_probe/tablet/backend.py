@@ -101,12 +101,15 @@ class TabletBackend:
         self.closing = threading.Event()
         self.thread = None
         self.busy = False
+        self.power_enabled = True
         self.last_result = None
         self.job_id = 0
         self._local = threading.local()
         self.command_lock = threading.Lock()
         self.discovered_hosts = {}
         self.manager.start()
+        from .usb_standby import USBStandby
+        self.usb_standby = USBStandby(self)
 
     def emit(self, kind, **values):
         self.messages.put({"kind": kind, "job": getattr(self._local, "job", None), **values})
@@ -117,7 +120,16 @@ class TabletBackend:
     def button_actions(self):
         return self.manager.button_actions()
 
+    def set_power_enabled(self, enabled):
+        """Software pause; do not stop Pi, close USB manager, or power off TFT."""
+        self.power_enabled = bool(enabled)
+        if not self.power_enabled:
+            self.stop_async()
+        self.usb_standby.request(self.power_enabled)
+
     def start(self, key, authorized=False, **options):
+        if not self.power_enabled:
+            raise ValueError("Switch OFF: move switch to ON before starting a tool.")
         if getattr(self, "_stop_thread", None) is not None and self._stop_thread.is_alive():
             raise ValueError("Stopping the previous operation. Try again in a moment.")
         if self.busy or self.closing.is_set():
@@ -228,6 +240,44 @@ class TabletBackend:
         return self.request(node, "OBSERVE", {"sensor": sensor, "duration_ms": duration}, purpose, duration)
 
     def execute(self, action, node, purpose, **options):
+        # BWifiKiller laboratory substitutes live only under the Illegal menu.
+        lab_sensors = {
+            "packet_watch": "packets",
+            "deauth_watch": "deauth",
+            "beacon_lab": "beacon_lab",
+            "ble_ad_lab": "ble_ad_lab",
+        }
+        if action in lab_sensors:
+            sensor = lab_sensors[action]
+            duration = 4000 if sensor in {"beacon_lab", "ble_ad_lab"} else 7000
+            result = self.observe(sensor, purpose, duration=duration, node="A")
+            return {"kind": action, "records": list(result),
+                    "count": len(result), "observation": result.metadata,
+                    "note": "Bounded laboratory operation; see tool description for capabilities."}
+        if action == "nrf_chat":
+            message = str(options.get("message", "RF Sentinel lab"))
+            if not 1 <= len(message.encode("utf-8")) <= 24:
+                raise ValueError("Message must be between 1 and 24 UTF-8 bytes")
+            return self.request("A", "TRANSMIT",
+                                {"test": "nrf_chat_loopback", "message": message}, purpose)
+        if action == "bt_remote_inventory":
+            import shutil
+            executable = shutil.which("bluetoothctl")
+            if not executable:
+                raise ValueError("BlueZ bluetoothctl is not installed on the Pi")
+            result = subprocess.run([executable, "devices", "Paired"],
+                                    capture_output=True, text=True, timeout=10)
+            if result.returncode:
+                raise ValueError(result.stderr.strip() or "Bluetooth service unavailable")
+            return {"kind": "paired_bluetooth_inventory", "devices": result.stdout.strip().splitlines(),
+                    "note": "Local pairing inventory only; no remote control commands have been sent."}
+        if action == "portal_demo":
+            # Purely local, offline preview. Never accepts or saves user inputs.
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            page = self.output_dir / "rf-sentinel-portal-demo.html"
+            page.write_text('<!doctype html><html lang="en"><meta charset="utf-8"><title>RF Sentinel Portal Demo</title><style>body{background:#101923;color:#fff;font-family:sans-serif;margin:5em auto;max-width:580px}h1{color:#4ee3b3}</style><h1>RF Sentinel - Offline Portal Demo</h1><p>This is a clearly labelled local preview, not a captive portal. No password collection.</p></html>', encoding="utf-8")
+            return {"kind": "offline_portal_demo", "file": str(page.resolve()),
+                    "note": "Open this HTML file locally on the Pi. This is not an active captive portal."}
         if action in {"wifi", "ble", "nrf", "cc1101", "rfid", "ir", "scope"}:
             return summarize(action, self.observe("nrf" if action == "scope" else action, purpose, node=node))
         if action in {"channels", "bt_spectrum"}:
@@ -394,7 +444,11 @@ class TabletBackend:
                                      "--node", role, "--port", port],
                                     capture_output=True, text=True, timeout=12)
             if result.returncode:
-                raise ValueError((result.stdout + result.stderr).strip()[-600:])
+                try:
+                    detail = json.loads(result.stdout)["error"]
+                except (ValueError, KeyError, TypeError):
+                    detail = (result.stdout + result.stderr).strip()[-1200:]
+                raise ValueError(detail)
             identified = NodeConfig.model_validate(json.loads(result.stdout))
             if identified.node != role or port_key(identified.port) != port_key(port):
                 raise ValueError("USB identity result does not match the selected role and port")
@@ -445,7 +499,11 @@ class TabletBackend:
                 raise ValueError("No ESP identified. " + "\n".join(errors))
             validate_configs(found)
             roles = {c.node for c in found}
-            combined = [c for c in current if c.node not in roles] + sorted(found, key=lambda c: c.node)
+            found_ports = {port_key(c.port) for c in found}
+            found_devices = {c.device for c in found}
+            displaced = [c for c in current if c.node not in roles and
+                         (port_key(c.port) in found_ports or c.device in found_devices)]
+            combined = [c for c in current if c.node not in roles and c not in displaced] + sorted(found, key=lambda c: c.node)
             try:
                 validate_configs(combined)
             except ValueError as exc:
@@ -453,7 +511,8 @@ class TabletBackend:
                                  "or forget the old assignment in Choose ESP manually.") from exc
             self._check_cancelled()
             self.save_configuration(combined)
-            return {"connected": [c.model_dump() for c in found], "unidentified": errors}
+            return {"connected": [c.model_dump() for c in found], "unidentified": errors,
+                    "replaced_assignments": [c.model_dump() for c in displaced]}
         finally:
             if not self.closing.is_set():
                 self.manager.start()
@@ -511,6 +570,7 @@ class TabletBackend:
         if self.closing.is_set():
             return
         self.closing.set()
+        self.usb_standby.shutdown()
         self.stop()
         if self.thread:
             self.thread.join(timeout=15)
