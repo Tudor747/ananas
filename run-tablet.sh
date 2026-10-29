@@ -7,4 +7,10 @@ if [[ ! -x "$tablet_python" ]]; then
   printf 'Install first: bash scripts/setup-tablet.sh\n' >&2
   exit 1
 fi
-exec "$tablet_python" -m pi_ot_probe.tablet "$@"
+# Desktop shortcut and autostart must not compete for GPIO/serial devices.
+case " $* " in
+  *" --check "*|*" --list-tools "*) exec "$tablet_python" -m pi_ot_probe.tablet "$@" ;;
+esac
+exec flock --nonblock --conflict-exit-code 73 \
+  "${XDG_RUNTIME_DIR:-/tmp}/rf-sentinel-tablet-$(id -u).lock" \
+  "$tablet_python" -m pi_ot_probe.tablet "$@"

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
 from datetime import datetime, timezone
 import getpass
@@ -22,6 +23,7 @@ from pi_ot_probe.collectors.wifi import discover_wifi
 from pi_ot_probe.database.repository import Repository
 from pi_ot_probe.peripherals.manager import NodeManager, load_config, port_key, validate_configs
 from pi_ot_probe.peripherals.protocol import Command, NodeConfig
+from pi_ot_probe.peripherals.ports import serial_ports
 from pi_ot_probe.peripherals.store import EvidenceStore
 from .catalog import BY_KEY
 from .diagnostics import dependencies
@@ -77,11 +79,14 @@ class TabletBackend:
         self.closing = threading.Event()
         self.thread = None
         self.busy = False
+        self.power_enabled = True
         self.last_result = None
         self.job_id = 0
         self._local = threading.local()
         self.command_lock = threading.Lock()
         self.manager.start()
+        from .usb_standby import USBStandby
+        self.usb_standby = USBStandby(self)
 
     def emit(self, kind, **values):
         self.messages.put({"kind": kind, "job": getattr(self._local, "job", None), **values})
@@ -92,7 +97,18 @@ class TabletBackend:
     def button_actions(self):
         return self.manager.button_actions()
 
+    def set_power_enabled(self, enabled):
+        """Software pause; do not stop Pi, close USB manager, or power off TFT."""
+        self.power_enabled = bool(enabled)
+        if not self.power_enabled:
+            self.stop_async()
+        self.usb_standby.request(self.power_enabled)
+
     def start(self, key, authorized=False, **options):
+        if not self.power_enabled:
+            raise ValueError("Switch OFF: move switch to ON before starting a tool.")
+        if getattr(self, "_stop_thread", None) is not None and self._stop_thread.is_alive():
+            raise ValueError("Stopping the previous operation. Try again in a moment.")
         if self.busy or self.closing.is_set():
             raise ValueError("An operation is running. Stop it or wait for completion.")
         tool = BY_KEY[key]
@@ -182,6 +198,44 @@ class TabletBackend:
         return self.request(node, "OBSERVE", {"sensor": sensor, "duration_ms": duration}, purpose, duration)
 
     def execute(self, action, node, purpose, **options):
+        # BWifiKiller laboratory substitutes live only under the Illegal menu.
+        lab_sensors = {
+            "packet_watch": "packets",
+            "deauth_watch": "deauth",
+            "beacon_lab": "beacon_lab",
+            "ble_ad_lab": "ble_ad_lab",
+        }
+        if action in lab_sensors:
+            sensor = lab_sensors[action]
+            duration = 4000 if sensor in {"beacon_lab", "ble_ad_lab"} else 7000
+            result = self.observe(sensor, purpose, duration=duration, node="A")
+            return {"kind": action, "records": list(result),
+                    "count": len(result), "observation": result.metadata,
+                    "note": "Bounded laboratory operation; see tool description for capabilities."}
+        if action == "nrf_chat":
+            message = str(options.get("message", "RF Sentinel lab"))
+            if not 1 <= len(message.encode("utf-8")) <= 24:
+                raise ValueError("Message must be between 1 and 24 UTF-8 bytes")
+            return self.request("A", "TRANSMIT",
+                                {"test": "nrf_chat_loopback", "message": message}, purpose)
+        if action == "bt_remote_inventory":
+            import shutil
+            executable = shutil.which("bluetoothctl")
+            if not executable:
+                raise ValueError("BlueZ bluetoothctl is not installed on the Pi")
+            result = subprocess.run([executable, "devices", "Paired"],
+                                    capture_output=True, text=True, timeout=10)
+            if result.returncode:
+                raise ValueError(result.stderr.strip() or "Bluetooth service unavailable")
+            return {"kind": "paired_bluetooth_inventory", "devices": result.stdout.strip().splitlines(),
+                    "note": "Local pairing inventory only; no remote control commands have been sent."}
+        if action == "portal_demo":
+            # Purely local, offline preview. Never accepts or saves user inputs.
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            page = self.output_dir / "rf-sentinel-portal-demo.html"
+            page.write_text('<!doctype html><html lang="en"><meta charset="utf-8"><title>RF Sentinel Portal Demo</title><style>body{background:#101923;color:#fff;font-family:sans-serif;margin:5em auto;max-width:580px}h1{color:#4ee3b3}</style><h1>RF Sentinel - Offline Portal Demo</h1><p>This is a clearly labelled local preview, not a captive portal. No password collection.</p></html>', encoding="utf-8")
+            return {"kind": "offline_portal_demo", "file": str(page.resolve()),
+                    "note": "Open this HTML file locally on the Pi. This is not an active captive portal."}
         if action in {"wifi", "ble", "nrf", "cc1101", "rfid", "ir", "scope"}:
             return summarize(action, self.observe("nrf" if action == "scope" else action, purpose, node=node))
         if action in {"channels", "bt_spectrum"}:
@@ -228,6 +282,8 @@ class TabletBackend:
         if action == "dependencies":
             return {"checks": dependencies(self.config_path)}
         if action == "pair":
+            if options.get("auto"):
+                return self.pair_all()
             if options.get("forget"):
                 return self.unpair(options.get("role", "A"))
             return self.pair(options.get("role", "A"), options["port"])
@@ -301,6 +357,58 @@ class TabletBackend:
             if not self.closing.is_set():
                 self.manager.start()
 
+    def pair_all(self):
+        """Identify USB boards concurrently, retaining disconnected assignments."""
+        ports = serial_ports()
+        if not ports:
+            raise ValueError("No USB serial boards detected. Plug in an ESP with a data cable and try again.")
+        current = load_config(self.config_path) if self.config_path.exists() else []
+        self.emit("progress", message="Finding ESPs... USB connections pause briefly.")
+        self.manager.stop()
+
+        def probe(port):
+            result = subprocess.run([sys.executable, "-m", "pi_ot_probe.peripherals.provision",
+                                     "--node", "auto", "--port", port],
+                                    capture_output=True, text=True, timeout=15)
+            if result.returncode:
+                try:
+                    detail = json.loads(result.stdout)["error"]
+                except (ValueError, KeyError):
+                    detail = (result.stdout + result.stderr).strip()[-400:]
+                raise ValueError(detail)
+            config = NodeConfig.model_validate(json.loads(result.stdout))
+            if port_key(config.port) != port_key(port):
+                raise ValueError("Identified USB port does not match the selected port")
+            return config
+
+        try:
+            self._check_cancelled()
+            found, errors = [], []
+            with ThreadPoolExecutor(max_workers=3) as executor:
+                pending = {executor.submit(probe, p["port"]): p["port"] for p in ports}
+                for future in as_completed(pending):
+                    self._check_cancelled()
+                    try:
+                        found.append(future.result())
+                    except (ValueError, OSError, subprocess.TimeoutExpired) as exc:
+                        errors.append(f"{pending[future]}: {exc}")
+            if not found:
+                raise ValueError("No ESP identified. " + "\n".join(errors))
+            validate_configs(found)
+            roles = {c.node for c in found}
+            combined = [c for c in current if c.node not in roles] + sorted(found, key=lambda c: c.node)
+            try:
+                validate_configs(combined)
+            except ValueError as exc:
+                raise ValueError("A saved board has a conflicting USB assignment. Reconnect all boards and retry, "
+                                 "or forget the old assignment in Choose ESP manually.") from exc
+            self._check_cancelled()
+            self.save_configuration(combined)
+            return {"connected": [c.model_dump() for c in found], "unidentified": errors}
+        finally:
+            if not self.closing.is_set():
+                self.manager.start()
+
     def unpair(self, role):
         """Forget a port assignment, retaining reports, USB evidence and other roles."""
         current = load_config(self.config_path) if self.config_path.exists() else []
@@ -343,10 +451,18 @@ class TabletBackend:
                     except ValueError:
                         logger.debug("ESP-%s went offline before STOP", state["node"], exc_info=True)
 
+    def stop_async(self):
+        # Serial/evidence locks must not block the Tk thread or GPIO polling.
+        self.cancelled.set()
+        if getattr(self, "_stop_thread", None) is None or not self._stop_thread.is_alive():
+            self._stop_thread = threading.Thread(target=self.stop, name="tablet-stop", daemon=True)
+            self._stop_thread.start()
+
     def close(self):
         if self.closing.is_set():
             return
         self.closing.set()
+        self.usb_standby.shutdown()
         self.stop()
         if self.thread:
             self.thread.join(timeout=15)

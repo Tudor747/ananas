@@ -15,19 +15,25 @@ if [[ "$(id -u)" == 0 ]]; then
   exit 1
 fi
 sudo apt update
-sudo apt install -y python3 python3-venv python3-pip python3-tk nmap iproute2
+sudo apt install -y python3 python3-venv python3-pip python3-tk python3-gpiozero python3-lgpio nmap iproute2
 python3 -c 'import sys; assert sys.version_info >= (3, 11), "Python 3.11+ is required"'
 if [[ ! -x .venv-pi/bin/python ]]; then
   if [[ -e .venv-pi/pyvenv.cfg ]]; then
     printf '.venv-pi exists but is unusable. Rename it and rerun setup.\n' >&2
     exit 1
   fi
-  python3 -m venv .venv-pi
+  python3 -m venv --system-site-packages .venv-pi
 fi
+sed -i 's/^include-system-site-packages = false/include-system-site-packages = true/' .venv-pi/pyvenv.cfg
 .venv-pi/bin/python -m pip install -e '.[hardware]'
+.venv-pi/bin/python -c 'import gpiozero, lgpio'
 if ! id -nG | tr ' ' '\n' | grep -qx dialout; then
   sudo usermod -aG dialout "$(id -un)"
   printf 'Serial access: log out of the Pi desktop and SSH, then log back in.\n'
+fi
+if ! id -nG | tr ' ' '\n' | grep -qx gpio; then
+  sudo usermod -aG gpio "$(id -un)"
+  printf 'GPIO access: log out and back in, or reboot.\n'
 fi
 .venv-pi/bin/python scripts/install-tablet-desktop.py "${autostart[@]}"
 .venv-pi/bin/python -m pi_ot_probe.tablet --check

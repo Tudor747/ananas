@@ -66,7 +66,12 @@ class GPIOButtons:
                 if pressed != self.previous[name] and now - self.changed[name] >= self.DEBOUNCE_SECONDS:
                     self.previous[name] = pressed
                     if pressed:
-                        self.callback(name)
+                        try:
+                            self.callback(name)
+                        except Exception:
+                            # A stale menu widget must not disable every physical button.
+                            # Do not replay the failed action: wait for the next press.
+                            logger.exception("GPIO action %s failed; buttons remain active", name)
             if self.active:
                 self._after_id = self.root.after(self.POLL_MS, self._tick)
         except Exception:
