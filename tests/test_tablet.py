@@ -388,6 +388,8 @@ def test_five_button_menu_can_run_stop_and_read_without_touch(monkeypatch):
         root.update()
         assert app.authorized.get() != before
     finally:
+        for token in root.tk.call("after", "info"):
+            root.after_cancel(token)
         root.destroy()
 
 
@@ -442,4 +444,6 @@ def test_native_layout_and_navigation(size, monkeypatch):
         assert len(app.body.winfo_children()) == 2
         assert all(t.winfo_height() >= 40 for t in app.body.winfo_children())
     finally:
+        for token in root.tk.call("after", "info"):
+            root.after_cancel(token)
         root.destroy()

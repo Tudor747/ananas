@@ -70,7 +70,10 @@ enum wifi_auth_mode_t { WIFI_AUTH_OPEN, WIFI_AUTH_WEP, WIFI_AUTH_WPA_PSK,
 inline struct WiFiClass {
     int scan_result = WIFI_SCAN_RUNNING;
     void mode(int) {} void scanDelete() {}
-    int scanNetworks(bool, bool, bool, int) { return WIFI_SCAN_RUNNING; }
+    int scanNetworks(bool async, bool hidden, bool passive, int dwell) {
+        assert(async && hidden && passive && dwell == 500);
+        return WIFI_SCAN_RUNNING;
+    }
     int scanComplete() { return scan_result; }
     String SSID(int i) { return i ? "AP two" : "AP one"; }
     String BSSIDstr(int i) { return i ? "02:00:00:00:00:02" : "02:00:00:00:00:01"; }
@@ -164,6 +167,7 @@ def test_wifi_security_and_truncation_are_reported(node_a_binary):
     events = [json.loads(line) for line in result.stdout.splitlines()]
     assert len(events) == 65
     assert all(e["security"] == "WPA2-PSK" and e["band"] == "2.4 GHz" for e in events[:-1])
+    assert all(e["hidden"] is False and e["frequency_mhz"] == 2437 for e in events[:-1])
     assert events[-1]["reported"] == 64 and events[-1]["total_found"] == 70
     assert events[-1]["truncated"] is True
 

@@ -15,6 +15,7 @@ from .diagnostics import discover_choices
 from .controller import Controller
 from .gpio_buttons import GPIOButtons
 from .presentation import connection_summary, describe_node, format_result, pretty_record
+from .wifi_view import WifiResults
 
 BG = "#0c1420"
 PANEL = "#172638"
@@ -144,6 +145,7 @@ class TabletApp:
             self.body.columnconfigure(index, weight=0, uniform="")
         self.active_job = None
         self.result_widget = self.graph = self.run_button = None
+        self.wifi_view = None
         self.host_actions = None
         self.forget_button = None
         self.result_text = None
@@ -164,6 +166,9 @@ class TabletApp:
         self.show_tool(BY_KEY[key])
 
     def back(self):
+        if self.wifi_view is not None:
+            self.wifi_view.handle("back")
+            return
         if self.tool and self.tool.action == "pair" and not self.backend.busy:
             previous = {"role": "start", "port": "role", "confirm": "port", "forget": "port", "done": "start", "error": "start"}
             if self.usb_step in previous:
@@ -424,6 +429,8 @@ class TabletApp:
             self.samples = []
             self.notice.set("Running…")
             self.set_result("")
+            if self.wifi_view is not None:
+                self.wifi_view.start_scan(tracking=bool(options.get("wifi_target")))
             self.draw_graph()
         except (ValueError, KeyError) as exc:
             self.notice.set(str(exc))
@@ -435,6 +442,15 @@ class TabletApp:
             self.result_widget.delete("1.0", "end")
             self.result_widget.insert("end", text)
             self.result_widget.configure(state="disabled")
+
+    def show_wifi_result(self, result):
+        if self.wifi_view is None:
+            job = self.active_job
+            self.reset_body()
+            self.active_job = job
+            self.wifi_view = WifiResults(self, result)
+        else:
+            self.wifi_view.update_result(result)
 
     def read_results(self):
         if self.result_widget is not None:
@@ -553,7 +569,10 @@ class TabletApp:
                     result = {**result, "screen_pixels": [self.root.winfo_screenwidth(), self.root.winfo_screenheight()],
                               "window_pixels": [self.root.winfo_width(), self.root.winfo_height()],
                               "available_tools": sum(t.action is not None for t in TOOLS)}
-                self.set_result(format_result(result))
+                if self.tool and self.tool.action in {"wifi", "channels", "radar", "pi_wifi"}:
+                    self.show_wifi_result(result)
+                else:
+                    self.set_result(format_result(result))
                 if self.host_actions is not None and result.get("scan") == "discovery":
                     for widget in self.host_actions.winfo_children():
                         widget.destroy()
@@ -564,6 +583,8 @@ class TabletApp:
                 if self.tool and self.tool.action not in {"pair", "overview", "about", "logs", "dependencies"}:
                     self.read_results()
                 self.draw_graph()
+            elif kind == "wifi_snapshot":
+                self.show_wifi_result(message["result"])
             elif kind in {"error", "cancelled", "progress"}:
                 if kind == "error" and self.tool and self.tool.action == "pair":
                     self.usb_step = "error"
@@ -574,8 +595,12 @@ class TabletApp:
                     self.notice.set(message["message"])
                     if kind in {"error", "cancelled"}:
                         changed_samples = False
-                        self.set_result(format_result(message.get("result", {
-                            "status": kind, "error": message["message"], "records": self.samples})))
+                        result = message.get("result", {
+                            "status": kind, "error": message["message"], "records": self.samples})
+                        if self.wifi_view is not None:
+                            self.show_wifi_result(result)
+                        else:
+                            self.set_result(format_result(result))
                         self.read_results()
             elif kind == "choices":
                 self.refreshing = False

@@ -17,8 +17,8 @@ CATEGORIES = ("System", "Wi-Fi", "RF Tools", "Bluetooth", "Other boards", "Games
 NODE_NAMES = {"A": "Wi-Fi / BLE / nRF", "B": "433 MHz / RFID", "C": "Infrared"}
 TOOLS = (
     Tool("wifi", "Wi-Fi Scanner", "Wi-Fi", "wifi", "Nearby 2.4 GHz access points observed by ESP-A.", "A"),
-    Tool("radar", "Wi-Fi Radar", "Wi-Fi", "radar", "Three signal snapshots. Signal strength does not measure distance or bearing.", "A"),
-    Tool("channels", "Channel Scan", "Wi-Fi", "channels", "Count observed access points by Wi-Fi channel. This is not channel utilization.", "A"),
+    Tool("radar", "Wi-Fi Radar", "Wi-Fi", "radar", "Select an AP, then track its RSSI over 12 scans with a live graph and signal trend.", "A"),
+    Tool("channels", "Channel Scan", "Wi-Fi", "channels", "Browse channels, open their AP list, then inspect each radio. Counts show observed APs, not airtime.", "A"),
     Tool("packets", "Packet Monitor", "Wi-Fi", None, "Original packet monitoring tool.", "A", "The installed node firmware does not stream packet-monitor data."),
     Tool("sentinel", "Sentinel Mode", "Wi-Fi", "sentinel", "Compare with the previous saved Wi-Fi snapshot. Missing APs may simply not have been observed.", "A"),
     Tool("ip", "IP Scanner", "Wi-Fi", "ip", "Find responding hosts on the Pi's local network (up to 256 addresses). Then select a host to check 20 common TCP ports."),

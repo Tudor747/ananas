@@ -34,7 +34,8 @@ ports. Cached neighbors are never added as newly discovered live hosts.
 | Pi Wi-Fi Scan | NetworkManager inventory from the Pi adapter | Guaranteed coverage of all bands; dBm is estimated from NetworkManager's percentage |
 | IP Scanner | Responding IPv4 hosts on a selected attached private subnet, at most 256 addresses | Devices behind another router, other nearby Wi-Fi networks, guaranteed discovery through firewalls/client isolation; IPv6 |
 | Host port check | 20 common TCP ports on one recently discovered local host, optional per host | All 65,535 ports, UDP, OS fingerprinting, guaranteed versions or vulnerability assessment |
-| Wi-Fi Radar / BT Analyzer | Three successive signal snapshots | Location, bearing, exact distance, or proof that a device vanished |
+| Wi-Fi Radar | Selected BSSID tracked over 12 scans, with signal trend and gaps for misses | Location, bearing, exact distance, or proof that a device vanished |
+| BT Analyzer | Three successive signal snapshots | Location, bearing, exact distance, or proof that a device vanished |
 | Channel Scan | Observed AP count per Wi-Fi channel | Channel airtime or actual congestion |
 | BLE | Passive BLE advertisements; advertised names may be absent | Classic Bluetooth discovery, pairing, remote control or reliable device/vendor identification |
 | nRF / scope / heatmap / advisor | Carrier-threshold samples, including 26 sampled channels for sweep | Wi-Fi packet decoding, full spectrum coverage, calibrated RSSI or oscilloscope waveforms |
@@ -50,6 +51,10 @@ unimplemented menu entries. Only one tablet job runs at a time.
 A hidden Wi-Fi SSID has not necessarily been decoded. A BSSID is the AP's radio
 address, not a discovered client's MAC. The ESP does not join scanned Wi-Fi
 networks; IP discovery uses whichever network the Pi itself is connected to.
+
+The native Wi-Fi views now follow BWifiKiller's list/detail/channel workflow.
+See [the Wi-Fi parity notes](wifi-bwifikiller-parity.md) for controls, source reuse,
+Radar behavior, update steps and validation limits.
 
 Nmap's discovery and DNS behavior is documented in its
 [host discovery reference](https://nmap.org/book/man-host-discovery.html) and

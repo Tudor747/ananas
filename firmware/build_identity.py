@@ -7,6 +7,7 @@ Import("env")  # noqa: F821 -- supplied by PlatformIO/SCons
 root = Path(env.subst("$PROJECT_DIR")).resolve().parent
 sources = [root / "firmware" / "platformio.ini", root / "BWifiKiller" / "platformio.ini",
            root / "BWifiKiller" / "include" / "app_config.h",
+           root / "BWifiKiller" / "include" / "wifi_observation.h",
            root / "BWifiKiller" / "src" / "sentinel_main.cpp"]
 sources += sorted((root / "firmware" / "include").glob("*.h"))
 sources += sorted((root / "firmware" / "src").glob("*.cpp"))

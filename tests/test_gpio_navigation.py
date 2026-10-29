@@ -219,10 +219,20 @@ def ui(monkeypatch):
     root.deiconify()
     root.update()
     yield app, root, backend
+    app.closing = True
     try:
+        # Tcl timers outlive destroyed callback commands when another test creates
+        # a Tk interpreter. Dispose timers and Variables on their owning thread.
+        for token in root.tk.call("after", "info"):
+            root.after_cancel(token)
         root.destroy()
     except tk.TclError:
         pass
+    for name, value in list(vars(app).items()):
+        if isinstance(value, tk.Variable):
+            setattr(app, name, None)
+    app.controller.app = None
+    app.controller.selected = None
     app = None
     gc.collect()
 

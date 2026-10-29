@@ -6,6 +6,7 @@
 #include "wifiscan.h"
 #include "app_config.h"
 #include "input_manager.h"
+#include "wifi_observation.h"
 
 extern String target_ssid;
 extern int    target_channel;
@@ -29,10 +30,7 @@ static unsigned long lastMarqueeUpdate = 0;
 // --- Presentation helpers ---
 
 static uint8_t getSignalBars(int rssi) {
-    if (rssi > -55) return 4;
-    if (rssi > -70) return 3;
-    if (rssi > -85) return 2;
-    return 1;
+    return WifiObservation::signalBars(rssi);
 }
 
 static const char* authLabel(wifi_auth_mode_t authMode) {
@@ -143,7 +141,7 @@ static void runScan() {
     WiFi.disconnect(true);
     delay(50);
 
-    WiFi.scanNetworks(true, true, false, 500);
+    WiFi.scanNetworks(true, true, false, WifiObservation::SCAN_DWELL_MS);
 
     const uint32_t startMs   = millis();
     const uint32_t timeoutMs = 9000;

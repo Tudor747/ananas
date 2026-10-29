@@ -2,6 +2,7 @@
 import json
 
 from .catalog import NODE_NAMES
+from .wifi_results import ap_details, track_summary
 
 
 def connection_summary(states):
@@ -35,17 +36,11 @@ def describe_node(state):
 
 def pretty_record(row):
     if "ssid" in row:
-        signal = row.get("rssi_dbm", row.get("signal_dbm"))
-        if "signal_percent" in row and row["signal_percent"] is None:
-            signal = None
-        quality = ("strong" if signal >= -55 else "good" if signal >= -67 else "weak" if signal >= -80 else "very weak") if isinstance(signal, (int, float)) else "unknown"
-        security = row.get("security") or row.get("authentication") or row.get("encryption") or "not reported (update ESP-A firmware)"
-        approximate = " (estimated from signal %)" if row.get("signal_percent") is not None else ""
-        strength = f"{signal} dBm{approximate}" if signal is not None else "not reported"
-        return (f"{row.get('ssid') or '(hidden SSID)'}\n"
-                f"  Signal: {strength} / {quality}\n"
-                f"  Channel: {row.get('channel', '?')} / {row.get('band') or 'band not reported'}\n"
-                f"  Security: {security}\n  BSSID: {row.get('bssid') or 'not reported'}")
+        details = ap_details(row)
+        if not any(row.get(k) for k in ("security", "authentication", "encryption")):
+            details = [(label, "not reported (update ESP-A firmware)" if label == "Security" else value)
+                       for label, value in details]
+        return str(details[0][1]) + "\n" + "\n".join(f"  {label}: {value}" for label, value in details[1:])
     if "address" in row and "rssi_dbm" in row:
         return f"{row.get('name') or 'Unnamed BLE device'}\n  {row['rssi_dbm']} dBm · {row['address']}"
     if "nrf1_carrier" in row:
@@ -123,6 +118,16 @@ def format_result(result):
         ) or "No USB events recorded yet."
     if "checks" in result:
         return "\n\n".join(f"{'OK' if c['ok'] else 'MISSING'} · {c['name']}\n{c['detail']}" for c in result["checks"])
+    if "target_bssid" in result:
+        track = track_summary(result.get("snapshots", []), result["target_bssid"])
+        current = f"{track['current']} dBm" if track["current"] is not None else "Not observed"
+        span = f"{track['minimum']} to {track['maximum']} dBm" if track["minimum"] is not None else "No readings"
+        return (f"Target: {track['bssid']}\n{track['trend']}\n"
+                f"Current: {current}\nSeen: {track['seen']}/{track['total']} scans\n"
+                f"Range: {span}\n\n" + result.get("note", ""))
+    if "access_points_per_channel" in result:
+        counts = "\n".join(f"Channel {ch}: {n} AP(s)" for ch, n in result["access_points_per_channel"].items())
+        return "Observed access points by channel\n\n" + (counts or "No access points observed") + "\n\n" + result["note"] + observation_notes(result) + "\n\n" + "\n\n".join(map(pretty_record, result.get("records", [])))
     if "records" in result:
         rows, kind = result["records"], result.get("kind", "")
         notes = {"wifi": "ESP-A: 2.4 GHz access points. Connected clients and their IPs are not collected.",
@@ -160,10 +165,6 @@ def format_result(result):
     if "tx_completed" in result:
         return (f"Transmit completed: {result['tx_completed']}\nMatching packet received: {result.get('matching_packet_received')}\n"
                 "Transmission alone does not prove reception.")
-    if "access_points_per_channel" in result:
-        return "Observed access points by channel\n\n" + ("\n".join(
-            f"Channel {channel}: {count} AP(s)" for channel, count in result["access_points_per_channel"].items())
-            or "No access points observed") + "\n\n" + result["note"] + observation_notes(result)
     if "devices_per_rssi_bin_dbm" in result:
         return "Bluetooth signal distribution\n\n" + ("\n".join(
             f"{low} to {int(low) + 9} dBm: {count} device(s)"

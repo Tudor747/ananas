@@ -10,7 +10,7 @@ class Controller:
         self.reading = False
         self.tag = f"SentinelController{id(self)}"
         for key, action in {"Up": "up", "Down": "down", "Left": "back", "BackSpace": "back",
-                            "Right": "select", "space": "select", "Return": "ok"}.items():
+                            "Right": "right", "space": "select", "Return": "ok"}.items():
             app.root.bind_class(self.tag, f"<{key}>", lambda event, a=action: self.handle(a))
         app.root.bindtags((self.tag, *app.root.bindtags()))
 
@@ -37,6 +37,11 @@ class Controller:
             if self.tag not in widget.bindtags():
                 # Handle keys before Tk's widget/class bindings to avoid double execution.
                 widget.bindtags((self.tag, *widget.bindtags()))
+        if getattr(self.app, "wifi_view", None) is not None:
+            self.focus(None)
+            self.app.wifi_view.canvas.focus_set()
+            self.app.wifi_view.draw()
+            return
         items = self.items()
         preferred = next((w for w in items if isinstance(w, tk.Checkbutton)), None)
         self.focus(preferred if preferred is not None else items[0] if items else None)
@@ -65,7 +70,7 @@ class Controller:
         # Finish a pending page rebuild before handling a second rapid press.
         self.app.root.update_idletasks()
         if self.app.tool is not None:
-            action = {"left": "back", "ok": "select", "up": "up", "down": "down"}.get(direction)
+            action = {"left": "back", "right": "right", "ok": "select", "up": "up", "down": "down"}.get(direction)
             if action:
                 self.handle(action)
             return
@@ -119,6 +124,11 @@ class Controller:
             return "break"
         # USB/keyboard presses can arrive in the same batch as a menu rebuild.
         self.app.root.update_idletasks()
+        if getattr(self.app, "wifi_view", None) is not None:
+            self.app.wifi_view.handle("rescan" if action == "right" else action)
+            return "break"
+        if action == "right":
+            action = "select"
         items = self.items()
         if self.selected not in items:
             self.focus(items[0] if items else None)

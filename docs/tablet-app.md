@@ -6,6 +6,10 @@ The menu includes the original BWifiKiller category and tool names. Availability
 is shown explicitly: several entries have a Pi equivalent, others remain
 unavailable. This is not a complete port of the standalone ESP firmware.
 
+Wi-Fi Scanner, Channel Scan, Radar and Pi Wi-Fi Scan have a dedicated
+[BWifiKiller-style result browser](wifi-bwifikiller-parity.md), including AP
+details, channel drill-down and selected-BSSID signal tracking.
+
 ## Install on the Pi
 
 From an SSH session or a Pi terminal, in the existing project folder:
@@ -256,8 +260,8 @@ automated checks do not validate the power budget or physical wiring.
 | Category / original tools | Native implementation |
 | --- | --- |
 | Wi-Fi Scanner | Passive ESP 2.4 GHz AP inventory and RSSI bars |
-| Wi-Fi Radar | Three signal snapshots; no bearing or distance claims |
-| Channel Scan | Unique observed AP counts by channel; not channel utilization |
+| Wi-Fi Radar | Select a BSSID, then track 12 scans with a live RSSI graph, trend and missed observations |
+| Channel Scan | Channel list → AP list → full AP details; counts are not channel utilization |
 | Sentinel Mode | Compare with the previous saved Wi-Fi snapshot |
 | IP Scanner | Pi Nmap host discovery on a selected local private subnet, max 256 addresses |
 | Web Dashboard | Native node overview; not the original ESP-hosted website |

@@ -12,6 +12,7 @@ import json
 import logging
 from pathlib import Path
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -30,6 +31,7 @@ from pi_ot_probe.peripherals.store import EvidenceStore
 from .catalog import BY_KEY
 from .diagnostics import dependencies
 from .network_results import completed_run, add_neighbor_macs, port_result
+from .wifi_results import channel_summary, unique_aps
 
 logger = logging.getLogger(__name__)
 
@@ -43,9 +45,13 @@ class Observation(list):
 def summarize(action, records):
     """Summaries only use observed samples, never invented measurements."""
     metadata = getattr(records, "metadata", {})
+    if action in {"wifi", "channels"}:
+        records = unique_aps(records)
+        for row in records:
+            row.setdefault("source", "ESP-A Wi-Fi")
+            row.setdefault("band", "2.4 GHz")
     if action == "channels":
-        aps = {r["bssid"]: r for r in records if "bssid" in r}
-        return {"kind": "wifi", "access_points_per_channel": dict(sorted(Counter(r["channel"] for r in aps.values()).items())),
+        return {"kind": "wifi", "access_points_per_channel": channel_summary(records), "records": records,
                 "observation": metadata, "note": "AP counts, not channel airtime or utilization"}
     if action == "bt_spectrum":
         devices = {r["address"]: r for r in records if "address" in r}
@@ -68,8 +74,8 @@ def summarize(action, records):
         if action == "advisor":
             rows.sort(key=lambda r: (r["hit_fraction"], r["channel"]))
         return {"sampled_channels": rows, "note": "Carrier threshold only; unsampled channels are unknown. Not a Wi-Fi channel recommendation."}
-    if action in {"wifi", "ble"}:
-        identity = "bssid" if action == "wifi" else "address"
+    if action == "ble":
+        identity = "address"
         unique = {}
         for index, row in enumerate(records):
             unique[row.get(identity, str(index))] = row
@@ -129,6 +135,7 @@ class TabletBackend:
         def work():
             self._local.job = job_id
             self._local.samples = []
+            self._local.wifi_tracking = None
             started = time.monotonic()
             def report(result, status):
                 return {"tool": key, "title": tool.title, "status": status,
@@ -138,6 +145,8 @@ class TabletBackend:
             def failed(kind, message):
                 result = {"kind": tool.action, "status": kind, "error": message,
                           "records": list(self._local.samples)}
+                if self._local.wifi_tracking is not None:
+                    result.update(self._local.wifi_tracking)
                 path = None
                 try:
                     path = str(self.save_report(report(result, kind)))
@@ -223,7 +232,27 @@ class TabletBackend:
             return summarize(action, self.observe("nrf" if action == "scope" else action, purpose, node=node))
         if action in {"channels", "bt_spectrum"}:
             return summarize(action, self.observe("wifi" if action == "channels" else "ble", purpose))
-        if action in {"radar", "bt_analyzer"}:
+        if action == "radar":
+            target = options.get("wifi_target")
+            if not target:
+                return summarize("wifi", self.observe("wifi", purpose))
+            if not isinstance(target, str) or not re.fullmatch(r"(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}", target):
+                raise ValueError("Select an AP with a valid BSSID before tracking.")
+            snapshots, observations, times = [], [], []
+            for i in range(12):
+                self._check_cancelled()
+                self.emit("progress", message=f"Tracking {target} · scan {i + 1}/12")
+                rows = self.observe("wifi", purpose)
+                snapshots.append(unique_aps(rows))
+                observations.append(getattr(rows, "metadata", {}))
+                times.append(datetime.now(timezone.utc).isoformat())
+                result = {"kind": "wifi", "target_bssid": target, "snapshots": list(snapshots),
+                          "observations": list(observations), "observed_at": list(times),
+                          "note": "RSSI trend for the selected BSSID. No distance or bearing measurement."}
+                self._local.wifi_tracking = result
+                self.emit("wifi_snapshot", result=result)
+            return result
+        if action == "bt_analyzer":
             snapshots = []
             for i in range(3):
                 self.emit("progress", message=f"Snapshot {i + 1}/3")
@@ -267,7 +296,7 @@ class TabletBackend:
                 return self.inspect_host(options["host"])
             return self.network_scan(options.get("target", ""))
         if action == "pi_wifi":
-            return {"source": "Pi NetworkManager", "access_points": [asdict(ap) for ap in asyncio.run(discover_wifi())]}
+            return {"source": "Pi NetworkManager", "access_points": unique_aps([asdict(ap) for ap in asyncio.run(discover_wifi())])}
         if action == "dependencies":
             return {"checks": dependencies(self.config_path)}
         if action == "pair":

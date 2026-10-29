@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 import sys
+import re
 
 from pi_ot_probe.domain.models import WifiAccessPoint
 from pi_ot_probe.collectors.process import run_command
@@ -72,10 +73,8 @@ def parse_nmcli(document: str) -> list[WifiAccessPoint]:
             parsed_channel = int(channel)
         except ValueError:
             parsed_channel = 0
-        try:
-            parsed_frequency = int(frequency)
-        except ValueError:
-            parsed_frequency = None
+        frequency_match = re.fullmatch(r"\s*(\d+)(?:\s*MHz)?\s*", frequency, re.IGNORECASE)
+        parsed_frequency = int(frequency_match[1]) if frequency_match else None
         encryption = "OPEN" if security.strip() in {"", "--"} else security.strip()
         access_points.append(WifiAccessPoint(
             ssid=ssid or "<hidden>",

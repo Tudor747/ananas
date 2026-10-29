@@ -7,6 +7,7 @@
 #include <BLEDevice.h>
 #include <BLEScan.h>
 #include "app_config.h"
+#include "wifi_observation.h"
 #include "sentinel_protocol.h"
 #include "sentinel_buttons.h"
 
@@ -22,20 +23,6 @@ static BLEScan* bleScan = nullptr;
 static volatile bool bleFinished = false;
 static int wifiResultIndex = 0;
 static constexpr int SCAN_RESULT_LIMIT = 64;
-
-static const char* securityName(wifi_auth_mode_t mode) {
-    switch (mode) {
-        case WIFI_AUTH_OPEN: return "Open";
-        case WIFI_AUTH_WEP: return "WEP";
-        case WIFI_AUTH_WPA_PSK: return "WPA-PSK";
-        case WIFI_AUTH_WPA2_PSK: return "WPA2-PSK";
-        case WIFI_AUTH_WPA_WPA2_PSK: return "WPA/WPA2-PSK";
-        case WIFI_AUTH_WPA2_ENTERPRISE: return "WPA2-Enterprise";
-        case WIFI_AUTH_WPA3_PSK: return "WPA3-PSK";
-        case WIFI_AUTH_WPA2_WPA3_PSK: return "WPA2/WPA3-PSK";
-        default: return "Unknown";
-    }
-}
 
 const char* hardwareHealth() { return active ? "busy" : (ready1 && ready2 ? "ready" : "error"); }
 void hardwareStop() {
@@ -101,7 +88,7 @@ bool hardwareCommand(const char* cmd, JsonObjectConst args, JsonObject result) {
     } else if (chosen == "wifi") {
         WiFi.mode(WIFI_STA); wifiResultIndex = 0;
         // Passive asynchronous scan, no association and no probe requests.
-        int scan = WiFi.scanNetworks(true, true, true, 120);
+        int scan = WiFi.scanNetworks(true, true, true, WifiObservation::SCAN_DWELL_MS);
         if (scan == WIFI_SCAN_FAILED) {
             hardwareStop(); result["error"] = "Wi-Fi scan start failed"; return true;
         }
@@ -127,7 +114,9 @@ void hardwarePoll() {
                 int i = wifiResultIndex++; auto p = Sentinel::event("wifi");
                 p["ssid"] = WiFi.SSID(i).substring(0,32); p["bssid"] = WiFi.BSSIDstr(i);
                 p["rssi_dbm"] = WiFi.RSSI(i); p["channel"] = WiFi.channel(i);
-                p["security"] = securityName(WiFi.encryptionType(i));
+                p["security"] = WifiObservation::securityName(WiFi.encryptionType(i));
+                p["hidden"] = WiFi.SSID(i).length() == 0;
+                p["frequency_mhz"] = WifiObservation::frequencyMhz(WiFi.channel(i));
                 p["band"] = "2.4 GHz"; Sentinel::emit();
             } else finish(nullptr, count, wifiResultIndex);
         } else if (expired) {

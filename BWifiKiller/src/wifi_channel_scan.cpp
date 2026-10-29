@@ -1,6 +1,7 @@
 #include "wifi_channel_scan.h"
 #include "ui_theme.h"
 #include "input_manager.h"
+#include "wifi_observation.h"
 #include <WiFi.h>
 #include <esp_wifi.h>
 #include <U8g2lib.h>
@@ -48,10 +49,7 @@ static const char* authLabel(wifi_auth_mode_t authMode) {
 }
 
 static uint8_t signalBars(int rssi) {
-    if (rssi > -55) return 4;
-    if (rssi > -70) return 3;
-    if (rssi > -85) return 2;
-    return 1;
+    return WifiObservation::signalBars(rssi);
 }
 
 static void resetScanData() {
@@ -79,10 +77,10 @@ static void startChannelScan() {
     resetScanData();
     scanState = CH_SCAN_SCANNING;
     scanStartMs = millis();
-    int started = WiFi.scanNetworks(true, true, false, 500);
+    int started = WiFi.scanNetworks(true, true, false, WifiObservation::SCAN_DWELL_MS);
     if (started == WIFI_SCAN_FAILED) {
         delay(100);
-        WiFi.scanNetworks(true, true, false, 500);
+        WiFi.scanNetworks(true, true, false, WifiObservation::SCAN_DWELL_MS);
     }
 }
 

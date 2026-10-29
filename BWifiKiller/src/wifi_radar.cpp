@@ -1,6 +1,7 @@
 #include "wifi_radar.h"
 #include "ui_theme.h"
 #include "input_manager.h"
+#include "wifi_observation.h"
 #include <WiFi.h>
 #include <esp_wifi.h>
 #include <U8g2lib.h>
@@ -67,10 +68,10 @@ static void startListScan() {
     lastListScanResult = 0;
     radarState = RADAR_SCANNING_LIST;
     scanStartMs = millis();
-    int started = WiFi.scanNetworks(true, true, false, 500);
+    int started = WiFi.scanNetworks(true, true, false, WifiObservation::SCAN_DWELL_MS);
     if (started == WIFI_SCAN_FAILED) {
         delay(100);
-        WiFi.scanNetworks(true, true, false, 500);
+        WiFi.scanNetworks(true, true, false, WifiObservation::SCAN_DWELL_MS);
     }
 }
 
@@ -157,7 +158,7 @@ static void drawNetworkRow(int idx, int y) {
 
     u8g2.setCursor(91, y);
     u8g2.print(networks[idx].rssi);
-    UiTheme::drawSignalBars(u8g2, 112, y, networks[idx].rssi > -55 ? 4 : networks[idx].rssi > -70 ? 3 : networks[idx].rssi > -85 ? 2 : 1);
+    UiTheme::drawSignalBars(u8g2, 112, y, WifiObservation::signalBars(networks[idx].rssi));
 
     if (selected) u8g2.setDrawColor(1);
 }

@@ -5,6 +5,13 @@ from pi_ot_probe.collectors.wifi import parse_nmcli, parse_windows_netsh
 
 
 class WifiParserTests(unittest.TestCase):
+    def test_nmcli_units_and_escaped_ssid_keep_radio_information(self) -> None:
+        points = parse_nmcli(r"Lab\:floor:AA\:BB\:CC\:DD\:EE\:FF:80:6:WPA2:2437 MHz:Infra:270 Mbit/s")
+        self.assertEqual(points[0].ssid, "Lab:floor")
+        self.assertEqual(points[0].frequency_mhz, 2437)
+        self.assertEqual(points[0].band, "2.4 GHz")
+        self.assertEqual(points[0].rate, "270 Mbit/s")
+
     def test_nmcli_parser_preserves_bssid_colons_and_open_network(self) -> None:
         document = "Factory:AA\\:BB\\:CC\\:DD\\:EE\\:FF:80:6:WPA2\nGuest:11\\:22\\:33\\:44\\:55\\:66:50:11:--\n"
         access_points = parse_nmcli(document)
