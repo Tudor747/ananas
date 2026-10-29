@@ -21,7 +21,7 @@ TOOLS = (
     Tool("channels", "Channel Scan", "Wi-Fi", "channels", "Count observed access points by Wi-Fi channel. This is not channel utilization.", "A"),
     Tool("packets", "Packet Monitor", "Wi-Fi", None, "Original packet monitoring tool.", "A", "The installed node firmware does not stream packet-monitor data."),
     Tool("sentinel", "Sentinel Mode", "Wi-Fi", "sentinel", "Compare with the previous saved Wi-Fi snapshot. Missing APs may simply not have been observed.", "A"),
-    Tool("ip", "IP Scanner", "Wi-Fi", "ip", "Discover hosts on a selected local private subnet with Nmap. At most 256 addresses."),
+    Tool("ip", "IP Scanner", "Wi-Fi", "ip", "Find responding hosts on the Pi's local network (up to 256 addresses). Then select a host to check 20 common TCP ports."),
     Tool("dashboard", "Web Dashboard", "Wi-Fi", "overview", "Native device overview. The original ESP access-point dashboard is not running in node_a."),
     Tool("analyzer", "Analyzer", "RF Tools", "nrf", "Carrier threshold samples from both nRF radios on the current channel.", "A"),
     Tool("heatmap", "RF Heatmap", "RF Tools", "sweep", "Receive-only samples at 26 nRF channels (every fifth channel). Unsampled frequencies remain unknown.", "A"),
@@ -53,7 +53,7 @@ TOOLS = (
     Tool("pi_wifi", "Pi Wi-Fi Scan", "System", "pi_wifi", "Use NetworkManager on the Pi. ESP Wi-Fi scanning does not need NetworkManager."),
     Tool("cc1101", "433 MHz / CC1101", "Other boards", "cc1101", "Receive RSSI from node B's configured radio.", "B"),
     Tool("rfid", "RFID / RC522", "Other boards", "rfid", "Observe a compatible tag with node B.", "B"),
-    Tool("ir", "Infrared Receiver", "Other boards", "ir", "Observe remote-control frames through node C.", "C"),
+    Tool("ir", "Infrared Receiver", "Other boards", "ir", "Listen for 10 seconds. Point a remote at ESP-C's IR receiver and press a button.", "C"),
 )
 BY_KEY = {tool.key: tool for tool in TOOLS}
 

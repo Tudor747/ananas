@@ -64,6 +64,9 @@ public:
     bool available() { return false; } bool testRPD() { return false; }
 };
 constexpr int WIFI_OFF = 0, WIFI_STA = 1, WIFI_SCAN_RUNNING = -1, WIFI_SCAN_FAILED = -2;
+enum wifi_auth_mode_t { WIFI_AUTH_OPEN, WIFI_AUTH_WEP, WIFI_AUTH_WPA_PSK,
+    WIFI_AUTH_WPA2_PSK, WIFI_AUTH_WPA_WPA2_PSK, WIFI_AUTH_WPA2_ENTERPRISE,
+    WIFI_AUTH_WPA3_PSK, WIFI_AUTH_WPA2_WPA3_PSK };
 inline struct WiFiClass {
     int scan_result = WIFI_SCAN_RUNNING;
     void mode(int) {} void scanDelete() {}
@@ -71,6 +74,7 @@ inline struct WiFiClass {
     int scanComplete() { return scan_result; }
     String SSID(int i) { return i ? "AP two" : "AP one"; }
     String BSSIDstr(int i) { return i ? "02:00:00:00:00:02" : "02:00:00:00:00:01"; }
+    wifi_auth_mode_t encryptionType(int) { return WIFI_AUTH_WPA2_PSK; }
     int RSSI(int) { return -50; } int channel(int) { return 6; }
 } WiFi;
 inline void esp_wifi_scan_stop() {}
@@ -125,8 +129,8 @@ int main(int argc, char** argv) {
     if (!hardwareCommand("OBSERVE", args.as<JsonObjectConst>(), result.to<JsonObject>())) return 2;
     clock_ms = 200;
     WiFi.scan_result = scenario == "wifi_failed" ? WIFI_SCAN_FAILED :
-                       scenario == "wifi_timeout" ? WIFI_SCAN_RUNNING : 2;
-    for (int i = 0; i < 4; ++i) hardwarePoll();
+                       scenario == "wifi_timeout" ? WIFI_SCAN_RUNNING : scenario == "wifi_many" ? 70 : 2;
+    for (int i = 0; i < 75; ++i) hardwarePoll();
 }
 ''', encoding="utf-8")
     binary = folder / ("node-a-test.exe" if os.name == "nt" else "node-a-test")
@@ -153,6 +157,15 @@ def test_failed_wifi_scan_is_not_reported_as_empty_success(node_a_binary, scenar
     assert len(events) == 1
     assert events[0]["complete"] is True
     assert events[0]["error"]
+
+
+def test_wifi_security_and_truncation_are_reported(node_a_binary):
+    result = subprocess.run([str(node_a_binary), "wifi_many"], capture_output=True, text=True, check=True, timeout=5)
+    events = [json.loads(line) for line in result.stdout.splitlines()]
+    assert len(events) == 65
+    assert all(e["security"] == "WPA2-PSK" and e["band"] == "2.4 GHz" for e in events[:-1])
+    assert events[-1]["reported"] == 64 and events[-1]["total_found"] == 70
+    assert events[-1]["truncated"] is True
 
 
 def test_actual_button_driver_debounces_repeats_only_navigation_and_survives_wrap(node_a_binary):

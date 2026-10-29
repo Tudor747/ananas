@@ -423,6 +423,41 @@ def test_menu_update_recovers_after_backend_error(ui, monkeypatch):
     assert app.usb_step == "start"
 
 
+def test_ip_results_and_port_inspection_use_buttons_only(ui):
+    from pi_ot_probe.tablet.catalog import BY_KEY
+    app, root, backend = ui
+    app.authorized.set(True)
+    app.show_tool(BY_KEY["ip"])
+    app.run_tool()
+    backend.busy = False
+    backend.messages.put({"kind": "done", "job": backend.job_id, "path": "report.json",
+                          "result": {"scan": "discovery", "target": "192.168.1.0/24",
+                                     "assets": [{"ip": "192.168.1.10", "hostname": "test-host"}]}})
+    app.poll_once()
+    assert app.controller.reading and app.controller.selected == app.result_widget
+    assert "test-host" in app.result_text
+    app.gpio_navigate("left")  # Leave reader without leaving the tool.
+    for _ in range(len(app.controller.items())):
+        if app.controller.selected in app.host_actions.winfo_children():
+            break
+        app.gpio_navigate("down")
+    app.gpio_navigate("ok")
+    assert backend.last_options["host"] == "192.168.1.10"
+
+
+def test_error_after_samples_is_not_overwritten_by_live_preview(ui):
+    from pi_ot_probe.tablet.catalog import BY_KEY
+    app, root, backend = ui
+    app.authorized.set(True)
+    app.show_tool(BY_KEY["wifi"])
+    app.run_tool()
+    backend.messages.put({"kind": "sample", "job": backend.job_id, "payload": {"ssid": "partial"}})
+    backend.messages.put({"kind": "error", "job": backend.job_id, "message": "USB removed"})
+    app.poll_once()
+    assert "SCAN FAILED" in app.result_text and "partial" in app.result_text
+    assert app.controller.reading
+
+
 def test_app_starts_gpio_once_and_stops_it_before_backend_shutdown(ui, monkeypatch):
     app, root, backend = ui
     instances = []

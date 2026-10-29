@@ -144,6 +144,7 @@ class TabletApp:
             self.body.columnconfigure(index, weight=0, uniform="")
         self.active_job = None
         self.result_widget = self.graph = self.run_button = None
+        self.host_actions = None
         self.forget_button = None
         self.result_text = None
         self.scroll_canvas = None
@@ -286,7 +287,7 @@ class TabletApp:
         if tool.action == "ip":
             self.label(content, "Select a local subnet:")
             for network in self.networks:
-                tk.Radiobutton(content, text=f"{network['interface']} · {network['safe_target']}",
+                tk.Radiobutton(content, text=f"{network['interface']} · {network['safe_target']}\nPi address: {network.get('address', '?')}",
                                variable=self.target, value=network["safe_target"], bg=BG, fg=TEXT,
                                selectcolor=PANEL, activebackground=BG, activeforeground=TEXT,
                                anchor="w", pady=10, wraplength=230).pack(fill="x")
@@ -304,6 +305,9 @@ class TabletApp:
         self.result_widget = tk.Text(content, height=14, bg=PANEL, fg=TEXT, wrap="word", relief="flat",
                                      padx=8, pady=8, state="disabled", insertbackground=TEXT)
         self.result_widget.pack(fill="both", expand=True, pady=4)
+        if tool.action == "ip":
+            self.host_actions = tk.Frame(content, bg=BG)
+            self.host_actions.pack(fill="x")
         # Dragging a result scrolls its own content. The outer scrollbar reaches the form.
         self.result_widget.bind("<ButtonPress-1>", lambda e: self.result_widget.scan_mark(e.x, e.y))
         self.result_widget.bind("<B1-Motion>", lambda e: self.result_widget.scan_dragto(e.x, e.y))
@@ -414,6 +418,9 @@ class TabletApp:
             self.backend.start(self.tool.key, authorized=self.authorized.get(), target=self.target.get(),
                                port=self.selected_port.get(), role=self.role.get(), **options)
             self.active_job = self.backend.job_id
+            if self.host_actions is not None and self.tool.action == "ip" and not options.get("host"):
+                for widget in self.host_actions.winfo_children():
+                    widget.destroy()
             self.samples = []
             self.notice.set("Running…")
             self.set_result("")
@@ -428,6 +435,13 @@ class TabletApp:
             self.result_widget.delete("1.0", "end")
             self.result_widget.insert("end", text)
             self.result_widget.configure(state="disabled")
+
+    def read_results(self):
+        if self.result_widget is not None:
+            self.root.update_idletasks()
+            self.controller.focus(self.result_widget)
+            self.controller.reading = False
+            self.controller.handle("select")
 
     def draw_graph(self):
         if not self.graph or not self.tool:
@@ -475,9 +489,12 @@ class TabletApp:
         key = "bssid" if any("bssid" in r for r in self.samples) else "address"
         rows = list({r[key]: r for r in self.samples if key in r and "rssi_dbm" in r}.values())
         rows.sort(key=lambda r: r["rssi_dbm"], reverse=True)
+        if rows:
+            graph.create_text(8, 5, anchor="nw", text=f"Strongest {min(4, len(rows))} of {len(rows)} - full list below",
+                              fill=MUTED, font=("DejaVu Sans", 9))
         for i, row in enumerate(rows[:4]):
             value = row["rssi_dbm"]
-            y = 10 + i * 30
+            y = 24 + i * 26
             graph.create_rectangle(6, y, 6 + max(0, min(1, (value + 100) / 70)) * (width - 12), y + 24,
                                    fill="#275850", outline="")
             name = row.get("ssid") or row.get("name") or row[key]
@@ -525,7 +542,7 @@ class TabletApp:
                 changed_samples = True
             elif kind == "done":
                 changed_samples = False
-                self.notice.set(f"Complete · saved to {message['path']}")
+                self.notice.set(f"Results saved to {message['path']}")
                 result = message["result"]
                 if self.tool and self.tool.action == "pair":
                     self.usb_step = "done"
@@ -537,6 +554,15 @@ class TabletApp:
                               "window_pixels": [self.root.winfo_width(), self.root.winfo_height()],
                               "available_tools": sum(t.action is not None for t in TOOLS)}
                 self.set_result(format_result(result))
+                if self.host_actions is not None and result.get("scan") == "discovery":
+                    for widget in self.host_actions.winfo_children():
+                        widget.destroy()
+                    for host in result["assets"]:
+                        self.button(self.host_actions, f"Check ports: {host['ip']}",
+                                    lambda ip=host["ip"]: self.run_tool(host=ip)).pack(fill="x", pady=3)
+                    self.controller.refresh()
+                if self.tool and self.tool.action not in {"pair", "overview", "about", "logs", "dependencies"}:
+                    self.read_results()
                 self.draw_graph()
             elif kind in {"error", "cancelled", "progress"}:
                 if kind == "error" and self.tool and self.tool.action == "pair":
@@ -546,6 +572,11 @@ class TabletApp:
                     self.notice.set("Connection failed. Select details to read.")
                 else:
                     self.notice.set(message["message"])
+                    if kind in {"error", "cancelled"}:
+                        changed_samples = False
+                        self.set_result(format_result(message.get("result", {
+                            "status": kind, "error": message["message"], "records": self.samples})))
+                        self.read_results()
             elif kind == "choices":
                 self.refreshing = False
                 self.choice_errors = message.get("errors", [])
@@ -555,7 +586,8 @@ class TabletApp:
                 if self.usb_step != "confirm" and self.selected_port.get() not in {p["port"] for p in self.ports}:
                     self.selected_port.set(self.ports[0]["port"] if self.ports else "")
                 if (self.tool and not self.backend.busy and
-                        (self.tool.action == "ip" or (self.tool.action == "pair" and self.usb_step == "port"))):
+                        ((self.tool.action == "ip" and self.active_job is None) or
+                         (self.tool.action == "pair" and self.usb_step == "port"))):
                     self.show_tool(self.tool)
         if changed_samples:
             self.set_result("\n\n".join(pretty_record(r) for r in self.samples[-30:]))

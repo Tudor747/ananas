@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
 from datetime import datetime, timezone
 import getpass
+import ipaddress
 import json
 import logging
 from pathlib import Path
@@ -20,6 +21,7 @@ from pi_ot_probe.collectors.interfaces import discover_local_networks
 from pi_ot_probe.collectors.nmap import find_nmap, parse_nmap_xml
 from pi_ot_probe.collectors.targets import validate_target
 from pi_ot_probe.collectors.wifi import discover_wifi
+from pi_ot_probe.collectors.process import run_command
 from pi_ot_probe.database.repository import Repository
 from pi_ot_probe.peripherals.manager import NodeManager, load_config, port_key, validate_configs
 from pi_ot_probe.peripherals.protocol import Command, NodeConfig
@@ -27,21 +29,29 @@ from pi_ot_probe.peripherals.ports import serial_ports
 from pi_ot_probe.peripherals.store import EvidenceStore
 from .catalog import BY_KEY
 from .diagnostics import dependencies
+from .network_results import completed_run, add_neighbor_macs, port_result
 
 logger = logging.getLogger(__name__)
 
 
+class Observation(list):
+    def __init__(self, records, metadata):
+        super().__init__(records)
+        self.metadata = metadata
+
+
 def summarize(action, records):
     """Summaries only use observed samples, never invented measurements."""
+    metadata = getattr(records, "metadata", {})
     if action == "channels":
         aps = {r["bssid"]: r for r in records if "bssid" in r}
-        return {"access_points_per_channel": dict(sorted(Counter(r["channel"] for r in aps.values()).items())),
-                "note": "AP counts, not channel airtime or utilization"}
+        return {"kind": "wifi", "access_points_per_channel": dict(sorted(Counter(r["channel"] for r in aps.values()).items())),
+                "observation": metadata, "note": "AP counts, not channel airtime or utilization"}
     if action == "bt_spectrum":
         devices = {r["address"]: r for r in records if "address" in r}
         bins = Counter((int(r["rssi_dbm"]) // 10) * 10 for r in devices.values() if "rssi_dbm" in r)
-        return {"devices_per_rssi_bin_dbm": dict(sorted(bins.items())),
-                "note": "RSSI bins span 10 dB; this is not a frequency spectrum"}
+        return {"kind": "ble", "devices_per_rssi_bin_dbm": dict(sorted(bins.items())),
+                "observation": metadata, "note": "RSSI bins span 10 dB; this is not a frequency spectrum"}
     if action in {"sweep", "advisor"}:
         channels = {}
         for row in records:
@@ -58,7 +68,13 @@ def summarize(action, records):
         if action == "advisor":
             rows.sort(key=lambda r: (r["hit_fraction"], r["channel"]))
         return {"sampled_channels": rows, "note": "Carrier threshold only; unsampled channels are unknown. Not a Wi-Fi channel recommendation."}
-    return {"records": records, "count": len(records)}
+    if action in {"wifi", "ble"}:
+        identity = "bssid" if action == "wifi" else "address"
+        unique = {}
+        for index, row in enumerate(records):
+            unique[row.get(identity, str(index))] = row
+        records = sorted(unique.values(), key=lambda r: r.get("rssi_dbm", -999), reverse=True)
+    return {"kind": action, "records": list(records), "count": len(records), "observation": metadata}
 
 
 class TabletBackend:
@@ -83,6 +99,7 @@ class TabletBackend:
         self.job_id = 0
         self._local = threading.local()
         self.command_lock = threading.Lock()
+        self.discovered_hosts = {}
         self.manager.start()
 
     def emit(self, kind, **values):
@@ -111,20 +128,33 @@ class TabletBackend:
 
         def work():
             self._local.job = job_id
+            self._local.samples = []
+            started = time.monotonic()
+            def report(result, status):
+                return {"tool": key, "title": tool.title, "status": status,
+                        "received_at": datetime.now(timezone.utc).isoformat(),
+                        "elapsed_seconds": round(time.monotonic() - started, 2),
+                        "source": f"ESP-{tool.node} USB" if tool.node else "Raspberry Pi", "result": result}
+            def failed(kind, message):
+                result = {"kind": tool.action, "status": kind, "error": message,
+                          "records": list(self._local.samples)}
+                path = None
+                try:
+                    path = str(self.save_report(report(result, kind)))
+                except OSError:
+                    logger.exception("Could not save incomplete scan report")
+                self.emit(kind, message=message, result=result, path=path)
             try:
                 result = self.execute(tool.action, tool.node, tool.title, **options)
                 self._check_cancelled()
-                self.last_result = {"tool": key, "title": tool.title,
-                                    "received_at": datetime.now(timezone.utc).isoformat(),
-                                    "source": f"ESP-{tool.node} USB" if tool.node else "Raspberry Pi",
-                                    "result": result}
+                self.last_result = report(result, "complete")
                 saved = self.save_report(self.last_result)
                 self.emit("done", result=result, path=str(saved))
             except InterruptedError:
-                self.emit("cancelled", message="Stopped. Partial samples are retained in the evidence log.")
+                failed("cancelled", "Stopped by user. This scan is incomplete.")
             except Exception as exc:
                 logger.exception("Tablet job %s (%s) failed", job_id, key)
-                self.emit("error", message=str(exc))
+                failed("error", str(exc))
             finally:
                 self.busy = False
 
@@ -174,15 +204,18 @@ class TabletBackend:
                     if payload.get("sensor") != args["sensor"]:
                         raise ValueError(f"ESP-{node} returned a different sensor for this observation")
                     if payload.get("complete"):
-                        return records
+                        return Observation(records, {k: v for k, v in payload.items() if k not in {"complete", "sensor"}})
                     records.append(payload)
+                    if hasattr(self._local, "samples"):
+                        self._local.samples.append(payload)
                     self.emit("sample", payload=payload)
             if self.cancelled.wait(.05):
                 self._check_cancelled()
         self.stop()
         raise TimeoutError(f"No completed {command} result from ESP-{node}")
 
-    def observe(self, sensor, purpose, duration=5000, node="A"):
+    def observe(self, sensor, purpose, duration=None, node="A"):
+        duration = duration if duration is not None else {"wifi": 8000, "ir": 10000, "rfid": 10000}.get(sensor, 5000)
         return self.request(node, "OBSERVE", {"sensor": sensor, "duration_ms": duration}, purpose, duration)
 
     def execute(self, action, node, purpose, **options):
@@ -195,7 +228,9 @@ class TabletBackend:
             for i in range(3):
                 self.emit("progress", message=f"Snapshot {i + 1}/3")
                 snapshots.append(self.observe("wifi" if action == "radar" else "ble", purpose))
-            return {"snapshots": snapshots, "note": "Separate signal snapshots; addresses may rotate. No distance or bearing measurement."}
+            return {"snapshots": snapshots, "observations": [getattr(rows, "metadata", {}) for rows in snapshots],
+                    "kind": "wifi" if action == "radar" else "ble",
+                    "note": "Separate signal snapshots; addresses may rotate. No distance or bearing measurement."}
         if action == "sentinel":
             records = self.observe("wifi", purpose)
             path = self.output_dir / "wifi-snapshot.json"
@@ -204,6 +239,7 @@ class TabletBackend:
             result = {"baseline_created": old is None, "currently_observed": list(current.values()),
                       "newly_observed": sorted(current.keys() - (old or {}).keys()),
                       "not_observed_this_time": sorted((old or {}).keys() - current.keys()),
+                      "kind": "wifi", "observation": getattr(records, "metadata", {}),
                       "note": "Compared with the preceding snapshot; absence is not proof of a missing device."}
             self.output_dir.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps(current, indent=2), encoding="utf-8")
@@ -220,12 +256,15 @@ class TabletBackend:
             self.request("A", "SET_CONFIG", {"channel": 76}, purpose)
             return self.request("A", "TRANSMIT", {"test": "nrf_link"}, purpose)
         if action == "coex":
-            result = {"note": "Sequential inventories; not simultaneous measurements or proof of interference."}
+            result = {"note": "Sequential inventories; not simultaneous measurements or proof of interference.", "observations": {}}
             for sensor in ("wifi", "ble", "nrf"):
                 self.emit("progress", message=f"Observing {sensor}")
                 result[sensor] = self.observe(sensor, purpose)
+                result["observations"][sensor] = getattr(result[sensor], "metadata", {})
             return result
         if action == "ip":
+            if options.get("host"):
+                return self.inspect_host(options["host"])
             return self.network_scan(options.get("target", ""))
         if action == "pi_wifi":
             return {"source": "Pi NetworkManager", "access_points": [asdict(ap) for ap in asyncio.run(discover_wifi())]}
@@ -248,28 +287,59 @@ class TabletBackend:
     def network_scan(self, target):
         networks = asyncio.run(discover_local_networks())
         validated = validate_target(target, networks)
+        self.discovered_hosts = {}
+        self.emit("progress", message=f"Discovering {validated}; allow up to three minutes")
+        document, warning = self.run_nmap(["-sn", "-PS22,80,443,445,3389", "--max-rate", "20",
+                                          "--max-retries", "1", "--host-timeout", "15s", str(validated)])
+        completed_run(document)
+        assets = [a.to_dict() for a in parse_nmap_xml(document)]
+        assets.sort(key=lambda a: ipaddress.ip_address(a["ip"]))
+        interfaces = [n for n in networks if validated.subnet_of(ipaddress.ip_network(n.network))]
+        warnings = [warning] if warning else []
+        if sys.platform == "linux":
+            try:
+                neighbors = asyncio.run(run_command("ip", "-j", "neigh", "show", timeout=3))
+                add_neighbor_macs(assets, neighbors, {n.interface for n in interfaces})
+            except (OSError, RuntimeError, ValueError) as exc:
+                warnings.append(f"MAC lookup unavailable: {exc}")
+        self.discovered_hosts = {a["ip"]: a for a in assets}
+        return {"scan": "discovery", "target": str(validated), "source": "Pi Nmap host discovery",
+                "interfaces": [n.to_dict() for n in interfaces], "assets": assets, "warnings": warnings,
+                "note": "Only responding hosts are listed. Firewalls, sleep and Wi-Fi client isolation can hide devices. "
+                        "Names require reverse DNS; MAC/vendor may be unavailable. Ports are checked separately."}
+
+    def inspect_host(self, host):
+        if host not in self.discovered_hosts:
+            raise ValueError("Choose a host from the latest IP scan first.")
+        validate_target(host + "/32", asyncio.run(discover_local_networks()))
+        self.emit("progress", message=f"Checking 20 common TCP ports on {host}; allow up to a minute")
+        document, warning = self.run_nmap(["-sT", "-Pn", "-n", "--top-ports", "20", "-sV", "--version-light",
+                                          "--max-rate", "10", "--max-retries", "1", "--host-timeout", "45s", host], 60)
+        result = port_result(document, self.discovered_hosts[host])
+        if warning:
+            result["warnings"].append(warning)
+        return result
+
+    def run_nmap(self, arguments, timeout=180):
         binary = find_nmap()
         if not binary:
             raise ValueError("Nmap is missing. Install on the Pi: sudo apt install nmap")
-        self.emit("progress", message=f"Discovering {validated}; this may take up to three minutes")
-        process = subprocess.Popen([binary, "-sn", "-n", "--max-rate", "20", "--max-retries", "1",
-                                    "--host-timeout", "10s", "-oX", "-", str(validated)],
+        process = subprocess.Popen([binary, *arguments[:-1], "-oX", "-", arguments[-1]],
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         try:
-            deadline = time.monotonic() + 180
+            deadline = time.monotonic() + timeout
             while True:
                 self._check_cancelled()
                 if time.monotonic() >= deadline:
-                    raise TimeoutError("Nmap discovery exceeded three minutes")
+                    raise TimeoutError(f"Nmap exceeded {timeout} seconds. Scan incomplete; try a smaller target or check the connection.")
                 try:
                     stdout, stderr = process.communicate(timeout=.2)
                     break
                 except subprocess.TimeoutExpired:
                     pass
             if process.returncode:
-                raise RuntimeError(stderr.decode(errors="replace")[:600] or "Nmap failed")
-            return {"target": str(validated), "source": "Pi Nmap host discovery",
-                    "assets": [a.to_dict() for a in parse_nmap_xml(stdout.decode(errors="replace"))]}
+                raise RuntimeError(stderr.decode(errors="replace")[:1000] or "Nmap failed")
+            return stdout.decode(errors="replace"), stderr.decode(errors="replace").strip()[:1000]
         finally:
             if process.poll() is None:
                 process.terminate()

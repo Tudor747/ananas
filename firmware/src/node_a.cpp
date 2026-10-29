@@ -21,6 +21,21 @@ static uint8_t channel = 76;
 static BLEScan* bleScan = nullptr;
 static volatile bool bleFinished = false;
 static int wifiResultIndex = 0;
+static constexpr int SCAN_RESULT_LIMIT = 64;
+
+static const char* securityName(wifi_auth_mode_t mode) {
+    switch (mode) {
+        case WIFI_AUTH_OPEN: return "Open";
+        case WIFI_AUTH_WEP: return "WEP";
+        case WIFI_AUTH_WPA_PSK: return "WPA-PSK";
+        case WIFI_AUTH_WPA2_PSK: return "WPA2-PSK";
+        case WIFI_AUTH_WPA_WPA2_PSK: return "WPA/WPA2-PSK";
+        case WIFI_AUTH_WPA2_ENTERPRISE: return "WPA2-Enterprise";
+        case WIFI_AUTH_WPA3_PSK: return "WPA3-PSK";
+        case WIFI_AUTH_WPA2_WPA3_PSK: return "WPA2/WPA3-PSK";
+        default: return "Unknown";
+    }
+}
 
 const char* hardwareHealth() { return active ? "busy" : (ready1 && ready2 ? "ready" : "error"); }
 void hardwareStop() {
@@ -30,10 +45,16 @@ void hardwareStop() {
     if (bleScan) bleScan->stop();
     active = false;
 }
-static void finish(const char* error = nullptr) {
+static void finish(const char* error = nullptr, int found = -1, int reported = -1) {
     hardwareStop();
     auto result = Sentinel::event(sensor.c_str());
     result["complete"] = true;
+    if (found >= 0) {
+        result["total_found"] = found;
+        result["reported"] = reported;
+        result["truncated"] = found > reported;
+        result["result_limit"] = SCAN_RESULT_LIMIT;
+    }
     if (error) result["error"] = error;
     Sentinel::emit();
 }
@@ -102,11 +123,13 @@ void hardwarePoll() {
         int count = WiFi.scanComplete();
         if (count == WIFI_SCAN_FAILED) { finish("Wi-Fi scan failed"); return; }
         if (count >= 0) {
-            if (wifiResultIndex < count && wifiResultIndex < 30) {
+            if (wifiResultIndex < count && wifiResultIndex < SCAN_RESULT_LIMIT) {
                 int i = wifiResultIndex++; auto p = Sentinel::event("wifi");
                 p["ssid"] = WiFi.SSID(i).substring(0,32); p["bssid"] = WiFi.BSSIDstr(i);
-                p["rssi_dbm"] = WiFi.RSSI(i); p["channel"] = WiFi.channel(i); Sentinel::emit();
-            } else finish();
+                p["rssi_dbm"] = WiFi.RSSI(i); p["channel"] = WiFi.channel(i);
+                p["security"] = securityName(WiFi.encryptionType(i));
+                p["band"] = "2.4 GHz"; Sentinel::emit();
+            } else finish(nullptr, count, wifiResultIndex);
         } else if (expired) {
             finish("Wi-Fi scan did not finish within the observation window");
         }
@@ -118,13 +141,18 @@ void hardwarePoll() {
         hardwareStop();
         BLEScanResults results = bleScan->getResults();
         // Cap the result batch and do not retain advertisement payloads.
-        for (int i = 0; i < results.getCount() && i < 20; ++i) {
+        int reported = 0;
+        for (int i = 0; i < results.getCount() && i < SCAN_RESULT_LIMIT; ++i) {
             BLEAdvertisedDevice device = results.getDevice(i); auto p = Sentinel::event("ble");
             p["address"] = device.getAddress().toString(); p["rssi_dbm"] = device.getRSSI();
             p["name"] = device.getName().substr(0,40); Sentinel::emit();
+            ++reported;
         }
         auto completed = Sentinel::event("ble");
         completed["complete"] = true;
+        completed["total_found"] = results.getCount(); completed["reported"] = reported;
+        completed["truncated"] = results.getCount() > reported;
+        completed["result_limit"] = SCAN_RESULT_LIMIT;
         Sentinel::emit();
     } else if (sensor == "nrf" && millis() - lastSample >= 250) {
         lastSample = millis(); auto p = Sentinel::event("nrf");
