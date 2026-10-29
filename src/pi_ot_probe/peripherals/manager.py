@@ -60,6 +60,8 @@ class NodeWorker:
         self.config, self.store, self.opener = config, store, opener
         self.on_input = on_input
         self.lock = threading.RLock()
+        # UI snapshots must never wait for serial writes or evidence transactions.
+        self.state_lock = threading.Lock()
         self.stop_event = threading.Event()
         self.queue = deque()
         self.counter = 0
@@ -69,11 +71,11 @@ class NodeWorker:
         self.thread = None
 
     def snapshot(self):
-        with self.lock:
+        with self.state_lock:
             return dict(self.state)
 
     def update(self, **values):
-        with self.lock:
+        with self.state_lock:
             self.state.update(values)
 
     def enqueue(self, command, expected_session=None):

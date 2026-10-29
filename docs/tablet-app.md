@@ -85,7 +85,8 @@ The driver samples on Tk's event loop every 30 ms and requires a stable input fo
 held at startup must be released and pressed again. One cancellable timer owns
 polling; shutdown, window destruction, read errors, and partial initialization
 release opened buttons. A GPIO setup failure is logged and leaves touch/keyboard
-usable. Linux launches try GPIO automatically; Windows/macOS previews do not.
+usable. A menu-action exception is logged without disabling the GPIO poller.
+Failed GPIO initialization/readers are retried every five seconds. Linux launches try GPIO automatically; Windows/macOS previews do not.
 
 The Pi environment described in the handoff already has these packages:
 
@@ -166,8 +167,8 @@ display connection must actually be available, not just a DISPLAY variable.
 
 1. Open **System > USB Setup** (System is on the first home page). You can also
    tap the connection strip at the top when no boards are configured.
-2. Use UP/DOWN and OK to choose **ESP-A**, choose its USB port on the next screen,
-   then confirm **Connect ESP-A now**. LEFT goes back one step. This reads
+2. Select **Find & connect ESPs**. It identifies the connected boards automatically
+   using HELLO and saves their actual A/B/C roles. This reads
    the identity, backs up an existing configuration, and preserves other roles.
 3. Wait for **A: ready** or **A: HW error**. Both mean USB identification succeeded;
    tap the connection strip for **Devices**, which shows live details for A/B/C.
@@ -192,7 +193,15 @@ firmware fixes. Original BWifiKiller standalone binaries use a different interfa
 | B | `node_b` | Other boards > 433 MHz / CC1101 and RFID / RC522 |
 | C | `node_c` | Other boards > Infrared Receiver |
 
-Set up B and C through the same three-step USB Setup flow. All choices are
+Use **System > USB Setup > Find & connect ESPs** with all boards attached.
+The app briefly pauses its USB workers and probes USB serial ports concurrently.
+It reads the actual firmware roles, saves identified boards, and retains absent
+assignments. No measurement or transmission commands are sent during discovery.
+Failures show readable details; a crashing ESP is reported separately from silence
+or incompatible firmware. Duplicate roles or conflicting assignments are rejected.
+No manual JSON edits or second tablet instance are needed.
+
+**Choose ESP manually** retains the three-step role/port/confirmation flow. All choices are
 full-width buttons, with a filled green highlight and automatic scrolling.
 Ports assigned to another role are excluded from the choices and their owners
 are listed. USB choices show the serial endpoint and the end of the stable path
@@ -204,8 +213,9 @@ identity, so a swapped cable cannot silently send A's commands to B. Setup brief
 pauses all USB workers, preserves the other roles, and reconnects them afterwards.
 An existing configuration is backed up to `nodes.json.bak` before a successful change.
 
-On Linux, the port picker prefers `/dev/serial/by-id/` and falls back to
-`/dev/serial/by-path/` when available. A by-path name depends on the USB socket:
+On Linux, unique USB serial numbers use `/dev/serial/by-id/`. Missing, duplicated,
+or generic `0001` serial numbers use `/dev/serial/by-path/` when available.
+Onboard UARTs such as `ttyAMA10` are excluded from USB discovery. A by-path name depends on the USB socket:
 keep those boards in the same sockets. With only `/dev/ttyUSB*` names available,
 recheck assignments after reconnecting cables or rebooting. Stable names prevent
 renumbering problems; the ESP identity check remains the final guard.
@@ -310,3 +320,28 @@ node configuration. The launcher changes directory to the repository root.
 Tests use serial fixtures and isolated local databases. Layout checks cover
 320x240, 480x320 and 800x480 where Tk is available. These are not physical Pi,
 touchscreen or radio validation. No live network or RF scans are run by tests.
+
+## Startup and white-screen diagnostics
+
+The installer installs GPIO Zero/lgpio and enables system site packages in
+`.venv-pi`, including when repairing an existing installation. Rerun
+`bash scripts/setup-tablet.sh` after updating and reboot once if groups changed.
+The normal launcher uses a per-user lock so autostart and the desktop shortcut
+cannot open competing tablet instances. Read-only `--check` remains available.
+
+Startup displays a dark loading screen while database/USB initialization runs
+on a worker thread. UI status snapshots do not wait on serial/evidence locks;
+Stop/Back queue cancellation off the Tk thread. Menu callback errors are logged
+and do not permanently disable buttons or periodic UI updates.
+
+If the physical display is still white, connect through SSH and run:
+
+```bash
+cd ~/Desktop/ananas
+bash scripts/tablet-support.sh
+```
+
+This reads processes, USB paths, the power-status register, desktop sessions and
+logs without stopping the running app. A white screen before the application
+starts, or loss of SSH too, still requires checking Pi power/display/OS startup;
+the application changes alone do not establish a fix for that hardware symptom.

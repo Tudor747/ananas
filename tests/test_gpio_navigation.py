@@ -158,8 +158,8 @@ def test_destroy_cleanup_ignores_child_widgets(gpio):
     assert not driver.active and not root.timers
 
 
-def test_callback_failure_stops_polling_and_frees_pins(gpio):
-    driver, root, _, now = gpio
+def test_callback_failure_preserves_buttons_for_next_action(gpio):
+    driver, root, actions, now = gpio
     def broken(_):
         raise RuntimeError("callback failed")
     driver.callback = broken
@@ -167,8 +167,14 @@ def test_callback_failure_stops_polling_and_frees_pins(gpio):
     root.tick()
     now[0] = .07
     root.tick()
-    assert not driver.active and not root.timers
-    assert all(button.closed for button in driver.buttons.values())
+    assert driver.active and root.timers
+    assert not any(button.closed for button in driver.buttons.values())
+    driver.callback = actions.append
+    driver.buttons["left"].is_pressed = True
+    root.tick()
+    now[0] = .14
+    root.tick()
+    assert actions == ["left"]
 
 
 def test_callback_can_close_during_poll(gpio):
@@ -319,6 +325,8 @@ def test_usb_setup_entirely_with_buttons(ui, size):
                  for i in range(3)]
     app.gpio_navigate("ok")  # System
     app.gpio_navigate("ok")  # USB Setup
+    app.gpio_navigate("down")  # Manual setup
+    app.gpio_navigate("ok")
     app.gpio_navigate("down")  # B
     app.gpio_navigate("ok")
     assert app.usb_step == "port" and app.role.get() == "B"
@@ -338,7 +346,7 @@ def test_usb_setup_entirely_with_buttons(ui, size):
     root.update()
     assert app.usb_step == "done"
     app.gpio_navigate("ok")
-    assert app.usb_step == "role"
+    assert app.usb_step == "start"
 
 
 def test_usb_assigned_ports_back_and_disconnected_selection(ui):
@@ -347,6 +355,8 @@ def test_usb_assigned_ports_back_and_disconnected_selection(ui):
     app.ports = [{"port": f"/dev/ttyUSB{i}", "description": "CP2102"} for i in range(2)]
     app.gpio_navigate("ok")
     app.gpio_navigate("ok")
+    app.gpio_navigate("down")
+    app.gpio_navigate("ok")  # Manual setup
     app.gpio_navigate("ok")  # A
     app.gpio_navigate("ok")  # only free USB1
     assert app.selected_port.get() == "/dev/ttyUSB1"
@@ -367,13 +377,50 @@ def test_usb_forget_requires_confirmation(ui):
     backend.state = lambda: [{"node": "A", "connection": "online", "port": "/dev/ttyUSB0"}]
     app.gpio_navigate("ok")
     app.gpio_navigate("ok")
-    app.gpio_navigate("ok")
+    app.gpio_navigate("down")
+    app.gpio_navigate("ok")  # Manual setup
+    app.gpio_navigate("ok")  # A
     app.gpio_navigate("down")  # Refresh -> Forget (no detected ports)
     app.gpio_navigate("ok")
     assert app.usb_step == "forget" and not backend.runs
     app.poll()
     app.gpio_navigate("ok")
     assert backend.last_options["forget"] is True
+
+
+def test_find_esps_needs_no_role_or_port_selection_and_error_is_readable(ui):
+    app, root, backend = ui
+    app.gpio_navigate("ok")
+    app.gpio_navigate("ok")
+    app.gpio_navigate("ok")
+    assert backend.last_options["auto"] is True
+    backend.busy = False
+    backend.messages.put({"kind": "error", "job": backend.job_id,
+                          "message": "ESP is crashing.\n" * 25})
+    app.poll_once()
+    root.update()
+    assert app.usb_step == "error"
+    for _ in range(len(app.controller.items())):
+        if app.controller.selected == app.result_widget:
+            break
+        app.gpio_navigate("down")
+    app.gpio_navigate("ok")
+    assert app.controller.reading
+    app.gpio_navigate("left")
+    app.gpio_navigate("left")
+    assert app.usb_step == "start"
+
+
+def test_menu_update_recovers_after_backend_error(ui, monkeypatch):
+    app, root, backend = ui
+    original = backend.state
+    def fail(): raise OSError("temporary state failure")
+    monkeypatch.setattr(backend, "state", fail)
+    app.poll()  # Must schedule the next update, rather than killing the event chain.
+    monkeypatch.setattr(backend, "state", original)
+    app.gpio_navigate("ok")
+    app.gpio_navigate("ok")
+    assert app.usb_step == "start"
 
 
 def test_app_starts_gpio_once_and_stops_it_before_backend_shutdown(ui, monkeypatch):

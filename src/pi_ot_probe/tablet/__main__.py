@@ -6,6 +6,8 @@ from logging.handlers import RotatingFileHandler
 import os
 from pathlib import Path
 import sys
+import queue
+import threading
 
 
 def main(argv=None):
@@ -57,21 +59,75 @@ def main(argv=None):
             handlers=[logging.StreamHandler(), RotatingFileHandler(
                 args.database.with_suffix(".log"), maxBytes=1_000_000, backupCount=2, encoding="utf-8")],
         )
-        backend = TabletBackend(args.nodes, args.database, args.reports)
     except Exception as exc:
         root.destroy()
         print(f"Cannot start tablet: {exc}", file=sys.stderr)
         return 1
-    window = None
+    # Paint before opening the database or starting USB workers. Keep Tk responsive
+    # even when an attached device or slow SD card delays backend initialization.
+    root.title("RF Sentinel")
+    root.configure(bg="#0c1420")
+    root.geometry(f"{size[0]}x{size[1]}" if size else "480x320")
+    root.attributes("-fullscreen", not args.windowed)
+    loading = tk.Label(root, text="Starting tablet...\nPreparing saved ESP connections",
+                       bg="#0c1420", fg="#4ee3b3", font=("DejaVu Sans", 14), wraplength=260)
+    loading.pack(expand=True, fill="both")
+    root.report_callback_exception = lambda kind, value, trace: logging.getLogger(__name__).error(
+        "Tk callback failed", exc_info=(kind, value, trace))
+    ready = queue.Queue()
+    backend = window = None
+    abandoned = threading.Event()
+
+    def initialize():
+        try:
+            instance = TabletBackend(args.nodes, args.database, args.reports)
+            ready.put(instance)
+            if abandoned.is_set():
+                instance.close()
+        except Exception as exc:
+            logging.exception("Tablet backend startup failed")
+            ready.put(exc)
+
+    def finish_startup():
+        nonlocal backend, window
+        try:
+            result = ready.get_nowait()
+        except queue.Empty:
+            root.after(50, finish_startup)
+            return
+        if isinstance(result, Exception):
+            loading.configure(text=f"Startup failed:\n{result}\nSee data/tablet.log", fg="#ffb5a5")
+            return
+        backend = result
+        try:
+            window = TabletApp(root, backend, fullscreen=not args.windowed, size=size)
+        except Exception as exc:
+            logging.exception("Tablet window startup failed")
+            for child in root.winfo_children():
+                if child is not loading:
+                    child.destroy()
+            loading.configure(text=f"Window startup failed:\n{exc}\nSee data/tablet.log", fg="#ffb5a5")
+        else:
+            loading.destroy()
+
+    threading.Thread(target=initialize, name="tablet-startup", daemon=True).start()
+    root.after(50, finish_startup)
     try:
-        window = TabletApp(root, backend, fullscreen=not args.windowed, size=size)
         root.mainloop()
     finally:
+        abandoned.set()
         try:
             if window is not None:
                 window.close_gpio()
         finally:
-            backend.close()
+            if backend is None:
+                try:
+                    result = ready.get_nowait()
+                    backend = result if not isinstance(result, Exception) else None
+                except queue.Empty:
+                    pass
+            if backend is not None:
+                backend.close()
     return 0
 
 

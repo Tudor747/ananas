@@ -6,6 +6,7 @@ import logging
 import random
 import sys
 import threading
+import time
 import tkinter as tk
 
 from pi_ot_probe.peripherals.manager import port_key
@@ -31,7 +32,9 @@ class TabletApp:
     def __init__(self, root, backend, fullscreen=True, size=None, enable_gpio=None):
         self.root, self.backend = root, backend
         self.gpio_buttons = None
-        self.usb_step = "role"
+        self.gpio_requested = sys.platform == "linux" if enable_gpio is None else enable_gpio
+        self._gpio_retry_at = 0
+        self.usb_step = "start"
         self._menu_refresh_id = None
         root.title("RF Sentinel · Tablet")
         root.configure(bg=BG)
@@ -95,13 +98,12 @@ class TabletApp:
         self.home()
         self.refresh_choices()
         self.poll()
-        use_gpio = sys.platform == "linux" if enable_gpio is None else enable_gpio
-        if use_gpio:
-            self.start_gpio()
 
     def start_gpio(self):
-        if self.closing or self.gpio_buttons is not None:
+        if self.closing or (self.gpio_buttons is not None and self.gpio_buttons.active):
             return
+        self.close_gpio()
+        self._gpio_retry_at = time.monotonic() + 5
         try:
             self.gpio_buttons = GPIOButtons(self.root, self.gpio_navigate)
             logger.info("GPIO navigation buttons activated")
@@ -151,7 +153,7 @@ class TabletApp:
 
     def home(self):
         if self.backend.busy:
-            self.backend.stop()
+            self.request_stop()
         self.category, self.page, self.tool = None, 0, None
         self.show_menu()
 
@@ -162,12 +164,12 @@ class TabletApp:
 
     def back(self):
         if self.tool and self.tool.action == "pair" and not self.backend.busy:
-            previous = {"port": "role", "confirm": "port", "forget": "port", "done": "role"}
+            previous = {"role": "start", "port": "role", "confirm": "port", "forget": "port", "done": "start", "error": "start"}
             if self.usb_step in previous:
                 self.usb_screen(previous[self.usb_step])
                 return
         if self.backend.busy:
-            self.backend.stop()
+            self.request_stop()
         if self.tool:
             self.tool = None
         elif self.category:
@@ -251,9 +253,9 @@ class TabletApp:
 
     def show_tool(self, tool):
         if self.backend.busy and tool != self.tool:
-            self.backend.stop()
+            self.request_stop()
         if tool.action == "pair" and (self.tool is None or self.tool.action != "pair"):
-            self.usb_step = "role"
+            self.usb_step = "start"
         self.tool = tool
         self.reset_body()
         self.title.configure(text=tool.title)
@@ -326,7 +328,7 @@ class TabletApp:
         content = self.scroll_area()
         role = self.role.get()
         step = self.usb_step
-        self.title.configure(text={"role": "1/3 Choose ESP", "port": "2/3 Choose USB",
+        self.title.configure(text={"start": "USB Setup", "error": "Connection problem", "role": "1/3 Choose ESP", "port": "2/3 Choose USB",
                                    "confirm": "3/3 Connect ESP", "forget": "Forget setup?",
                                    "done": "Setup saved"}[step])
 
@@ -338,7 +340,11 @@ class TabletApp:
 
         states = self.backend.state()
         assigned = {port_key(s["port"]): s["node"] for s in states if s.get("port")}
-        if step == "role":
+        if step == "start":
+            self.run_button = choice("Find & connect ESPs", lambda: self.run_tool(auto=True))
+            choice("Choose ESP manually", lambda: self.usb_screen("role"))
+            self.label(content, "Plug in your boards, then choose Find. Their firmware identifies A, B and C automatically.", MUTED)
+        elif step == "role":
             for name in "ABC":
                 state = next((s for s in states if s["node"] == name), {})
                 status = state.get("connection", "unconfigured")
@@ -371,13 +377,17 @@ class TabletApp:
             self.label(content, "Other boards and reports are kept." if forgetting else self.selected_port.get())
             self.label(content, "USB connections pause briefly during setup.", MUTED)
         else:
-            choice("Set up another ESP", lambda: self.usb_screen("role"))
+            choice("Try again" if step == "error" else "Set up another ESP", lambda: self.usb_screen("start"))
             choice("Back to System", lambda: self.open_category("System"))
         if getattr(self.backend, "config_error", ""):
             self.label(content, self.backend.config_error, ERROR)
         if self.choice_errors:
             self.label(content, "\n".join(self.choice_errors), ERROR)
-        tk.Label(self.footer, textvariable=self.notice, bg=BG, fg=ACCENT,
+        if step in {"error", "done"}:
+            self.result_widget = tk.Text(content, height=5, bg=PANEL, fg=TEXT, wrap="word",
+                                         state="disabled", relief="flat")
+            self.result_widget.pack(fill="both", expand=True)
+        tk.Label(self.footer, textvariable=self.notice, bg=BG, fg=ACCENT, height=2,
                  wraplength=max(180, self.root.winfo_width() - 20)).pack(fill="x")
         self.button(self.footer, "Back", self.back).pack(fill="x")
 
@@ -389,8 +399,12 @@ class TabletApp:
             self.backend.emit("choices", **discover_choices())
         threading.Thread(target=work, daemon=True).start()
 
+    def request_stop(self):
+        stop = getattr(self.backend, "stop_async", self.backend.stop)
+        stop()
+
     def stop_work(self):
-        self.backend.stop()
+        self.request_stop()
         self.notice.set("Stopping all connected ESPs...")
 
     def run_tool(self, **options):
@@ -474,6 +488,20 @@ class TabletApp:
     def poll(self):
         if self.closing:
             return
+        try:
+            self.poll_once()
+        except Exception:
+            logger.exception("Tablet update failed; retrying without disabling buttons")
+        finally:
+            if not self.closing:
+                self.root.after(150, self.poll)
+
+    def poll_once(self):
+        if self.closing:
+            return
+        if (self.gpio_requested and time.monotonic() >= self._gpio_retry_at and
+                (self.gpio_buttons is None or not self.gpio_buttons.active)):
+            self.start_gpio()
         states = self.backend.state()
         self.status.set(connection_summary(states))
         trouble = any(s.get("health") == "error" or s["connection"] == "offline" for s in states)
@@ -511,7 +539,13 @@ class TabletApp:
                 self.set_result(format_result(result))
                 self.draw_graph()
             elif kind in {"error", "cancelled", "progress"}:
-                self.notice.set(message["message"])
+                if kind == "error" and self.tool and self.tool.action == "pair":
+                    self.usb_step = "error"
+                    self.show_tool(self.tool)
+                    self.set_result(message["message"])
+                    self.notice.set("Connection failed. Select details to read.")
+                else:
+                    self.notice.set(message["message"])
             elif kind == "choices":
                 self.refreshing = False
                 self.choice_errors = message.get("errors", [])
@@ -520,7 +554,8 @@ class TabletApp:
                     self.target.set(self.networks[0]["safe_target"] if self.networks else "")
                 if self.usb_step != "confirm" and self.selected_port.get() not in {p["port"] for p in self.ports}:
                     self.selected_port.set(self.ports[0]["port"] if self.ports else "")
-                if self.tool and self.tool.action in {"pair", "ip"} and not self.backend.busy:
+                if (self.tool and not self.backend.busy and
+                        (self.tool.action == "ip" or (self.tool.action == "pair" and self.usb_step == "port"))):
                     self.show_tool(self.tool)
         if changed_samples:
             self.set_result("\n\n".join(pretty_record(r) for r in self.samples[-30:]))
@@ -533,7 +568,7 @@ class TabletApp:
             if self.tool.node:
                 available &= any(s["node"] == self.tool.node and s["connection"] == "online" for s in states)
             if self.tool.action == "pair":
-                available &= (self.usb_step == "forget" or
+                available &= (self.usb_step in {"start", "forget"} or
                               self.selected_port.get() in {p["port"] for p in self.ports})
             if self.tool.action == "ip":
                 available &= bool(self.target.get())
@@ -542,7 +577,6 @@ class TabletApp:
             self.forget_button.configure(state="disabled" if self.backend.busy else "normal")
         for action in getattr(self.backend, "button_actions", lambda: [])():
             self.controller.handle(action)
-        self.root.after(150, self.poll)
 
     def memory_game(self):
         values = list("ABCDEF") * 2

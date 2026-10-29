@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
 from datetime import datetime, timezone
 import getpass
@@ -22,6 +23,7 @@ from pi_ot_probe.collectors.wifi import discover_wifi
 from pi_ot_probe.database.repository import Repository
 from pi_ot_probe.peripherals.manager import NodeManager, load_config, port_key, validate_configs
 from pi_ot_probe.peripherals.protocol import Command, NodeConfig
+from pi_ot_probe.peripherals.ports import serial_ports
 from pi_ot_probe.peripherals.store import EvidenceStore
 from .catalog import BY_KEY
 from .diagnostics import dependencies
@@ -93,6 +95,8 @@ class TabletBackend:
         return self.manager.button_actions()
 
     def start(self, key, authorized=False, **options):
+        if getattr(self, "_stop_thread", None) is not None and self._stop_thread.is_alive():
+            raise ValueError("Stopping the previous operation. Try again in a moment.")
         if self.busy or self.closing.is_set():
             raise ValueError("An operation is running. Stop it or wait for completion.")
         tool = BY_KEY[key]
@@ -228,6 +232,8 @@ class TabletBackend:
         if action == "dependencies":
             return {"checks": dependencies(self.config_path)}
         if action == "pair":
+            if options.get("auto"):
+                return self.pair_all()
             if options.get("forget"):
                 return self.unpair(options.get("role", "A"))
             return self.pair(options.get("role", "A"), options["port"])
@@ -301,6 +307,58 @@ class TabletBackend:
             if not self.closing.is_set():
                 self.manager.start()
 
+    def pair_all(self):
+        """Identify USB boards concurrently, retaining disconnected assignments."""
+        ports = serial_ports()
+        if not ports:
+            raise ValueError("No USB serial boards detected. Plug in an ESP with a data cable and try again.")
+        current = load_config(self.config_path) if self.config_path.exists() else []
+        self.emit("progress", message="Finding ESPs... USB connections pause briefly.")
+        self.manager.stop()
+
+        def probe(port):
+            result = subprocess.run([sys.executable, "-m", "pi_ot_probe.peripherals.provision",
+                                     "--node", "auto", "--port", port],
+                                    capture_output=True, text=True, timeout=15)
+            if result.returncode:
+                try:
+                    detail = json.loads(result.stdout)["error"]
+                except (ValueError, KeyError):
+                    detail = (result.stdout + result.stderr).strip()[-400:]
+                raise ValueError(detail)
+            config = NodeConfig.model_validate(json.loads(result.stdout))
+            if port_key(config.port) != port_key(port):
+                raise ValueError("Identified USB port does not match the selected port")
+            return config
+
+        try:
+            self._check_cancelled()
+            found, errors = [], []
+            with ThreadPoolExecutor(max_workers=3) as executor:
+                pending = {executor.submit(probe, p["port"]): p["port"] for p in ports}
+                for future in as_completed(pending):
+                    self._check_cancelled()
+                    try:
+                        found.append(future.result())
+                    except (ValueError, OSError, subprocess.TimeoutExpired) as exc:
+                        errors.append(f"{pending[future]}: {exc}")
+            if not found:
+                raise ValueError("No ESP identified. " + "\n".join(errors))
+            validate_configs(found)
+            roles = {c.node for c in found}
+            combined = [c for c in current if c.node not in roles] + sorted(found, key=lambda c: c.node)
+            try:
+                validate_configs(combined)
+            except ValueError as exc:
+                raise ValueError("A saved board has a conflicting USB assignment. Reconnect all boards and retry, "
+                                 "or forget the old assignment in Choose ESP manually.") from exc
+            self._check_cancelled()
+            self.save_configuration(combined)
+            return {"connected": [c.model_dump() for c in found], "unidentified": errors}
+        finally:
+            if not self.closing.is_set():
+                self.manager.start()
+
     def unpair(self, role):
         """Forget a port assignment, retaining reports, USB evidence and other roles."""
         current = load_config(self.config_path) if self.config_path.exists() else []
@@ -342,6 +400,13 @@ class TabletBackend:
                         self.manager.command(state["node"], Command(command="STOP"))
                     except ValueError:
                         logger.debug("ESP-%s went offline before STOP", state["node"], exc_info=True)
+
+    def stop_async(self):
+        # Serial/evidence locks must not block the Tk thread or GPIO polling.
+        self.cancelled.set()
+        if getattr(self, "_stop_thread", None) is None or not self._stop_thread.is_alive():
+            self._stop_thread = threading.Thread(target=self.stop, name="tablet-stop", daemon=True)
+            self._stop_thread.start()
 
     def close(self):
         if self.closing.is_set():

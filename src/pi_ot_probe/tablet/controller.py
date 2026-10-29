@@ -101,6 +101,8 @@ class Controller:
         if canvas is None or not canvas.winfo_exists() or not str(widget).startswith(str(canvas) + "."):
             return
         self.app.root.update_idletasks()
+        if not widget.winfo_exists() or not canvas.winfo_exists():
+            return
         bounds = canvas.bbox("all")
         if not bounds:
             return
@@ -115,6 +117,8 @@ class Controller:
     def handle(self, action):
         if self.app.closing:
             return "break"
+        # USB/keyboard presses can arrive in the same batch as a menu rebuild.
+        self.app.root.update_idletasks()
         items = self.items()
         if self.selected not in items:
             self.focus(items[0] if items else None)

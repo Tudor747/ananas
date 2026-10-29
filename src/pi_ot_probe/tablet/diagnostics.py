@@ -36,6 +36,14 @@ def dependencies(config_path=None):
         except (ImportError, OSError) as exc:
             ok, detail = False, f"{package} ({exc})"
         checks.append({"name": module, "ok": ok, "required": True, "detail": detail})
+    if sys.platform == "linux":
+        for module in ("gpiozero", "lgpio"):
+            try:
+                importlib.import_module(module)
+                ok, detail = True, "Installed"
+            except (ImportError, OSError) as exc:
+                ok, detail = False, f"Run bash scripts/setup-tablet.sh for Pi buttons ({exc})"
+            checks.append({"name": module, "ok": ok, "required": False, "detail": detail})
     for name, detail in (("nmap", "IP Scanner: sudo apt install nmap"),
                          ("ip", "Interface fallback: sudo apt install iproute2"),
                          ("nmcli", "Pi Wi-Fi Scan: needs NetworkManager managing the Wi-Fi adapter")):

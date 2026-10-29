@@ -426,8 +426,10 @@ def test_native_layout_and_navigation(size, monkeypatch):
         app.show_tool(BY_KEY["usb"])
         root.update()
         assert app.graph is None
-        assert app.run_button is None
-        assert app.usb_step == "role"
+        assert app.run_button.cget("text") == "Find & connect ESPs"
+        assert app.usb_step == "start"
+        app.gpio_navigate("down")
+        app.gpio_navigate("ok")  # Manual setup
         app.gpio_navigate("ok")
         root.update()
         assert app.usb_step == "port"
