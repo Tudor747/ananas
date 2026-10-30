@@ -55,9 +55,13 @@ Older firmware can identify correctly but supplies no per-peripheral details.
 ## What HW error means
 
 A working USB handshake can coexist with a failed peripheral. Node A expects
-both nRF modules to initialize; node B checks both CC1101 and RC522. A missing
-RC522 therefore produces an aggregate hardware error even when CC1101 works.
-Wi-Fi/BLE on A and individually healthy sensors on B remain usable.
+both nRF modules to initialize; this behavior is unchanged. Node B supports
+CC1101 alone, RC522 alone, or both. It reports ready when at least one initializes
+and error when neither initializes. Each peripheral's check remains visible;
+commands for a missing or failed module return a specific unavailable error.
+Older node B firmware may report an aggregate error when only one module is
+present. Flash the updated `node_b` firmware to apply this change; updating the
+Pi app alone is insufficient. Wi-Fi/BLE on A remain usable despite an nRF error.
 
 New firmware supplies the individual initialization results in HELLO/STATUS,
 and Devices displays each check. These are SPI initialization checks, not an

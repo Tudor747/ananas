@@ -252,13 +252,15 @@ int main() {
     subprocess.run([str(binary)], check=True, capture_output=True, text=True, timeout=5)
 
 
-def test_node_b_keeps_rfid_bus_when_cc1101_is_missing(node_a_binary):
+@pytest.fixture(scope="module")
+def node_b_binary(node_a_binary):
     folder = node_a_binary.parent
     (folder / "RadioLib.h").write_text(r'''
 #include "mock_hardware.h"
 constexpr int RADIOLIB_NC = -1, RADIOLIB_ERR_NONE = 0;
 constexpr int RADIOLIB_ERR_PACKET_TOO_LONG = -2, MSBFIRST = 1, SPI_MODE0 = 0;
 inline bool bus_running = true;
+inline bool cc_present = false, rfid_present = true;
 struct SPISettings { SPISettings(int, int, int) {} };
 struct Module {
     bool owns_bus;
@@ -270,10 +272,11 @@ struct CC1101 {
     CC1101(Module* m) : module(m) {}
     int begin(double) {
         // RadioLib 6.6.0 terminates its owned SPI interface on chip-not-found.
-        if (module->owns_bus) bus_running = false;
-        return -1;
+        if (!cc_present && module->owns_bus) bus_running = false;
+        return cc_present ? 0 : -1;
     }
-    void standby() {} int startReceive() { return 0; }
+    void standby() { assert(cc_present); }
+    int startReceive() { assert(cc_present && bus_running); return 0; }
     size_t getPacketLength() { return 0; }
     int readData(uint8_t*,size_t) { return 0; } int getRSSI() { return -90; }
 };
@@ -286,8 +289,9 @@ struct MFRC522 {
     struct { int size = 4, sak = 0; } uid;
     MFRC522(int,int) {}
     void PCD_Init() { assert(bus_running); }
-    byte PCD_ReadRegister(int) { return bus_running ? 0x92 : 0; }
-    void PCD_AntennaOff() {} void PCD_AntennaOn() { assert(bus_running); }
+    byte PCD_ReadRegister(int) { return bus_running && rfid_present ? 0x92 : 0; }
+    void PCD_AntennaOff() { assert(rfid_present); }
+    void PCD_AntennaOn() { assert(bus_running && rfid_present); }
     bool PICC_IsNewCardPresent() { return true; }
     bool PICC_ReadCardSerial() { return true; }
     static int PICC_GetType(int) { return 0; }
@@ -303,13 +307,37 @@ struct MFRC522 {
 void setup();
 bool hardwareCommand(const char*, JsonObjectConst, JsonObject);
 void hardwarePoll();
-int main() {
+void hardwareStop();
+const char* hardwareHealth();
+extern bool cc_present, rfid_present;
+int main(int argc, char** argv) {
+    cc_present = std::string(argv[1]) == "1";
+    rfid_present = std::string(argv[2]) == "1";
     setup();
     StaticJsonDocument<512> args, result;
-    args["sensor"] = "rfid"; args["duration_ms"] = 1000;
-    assert(hardwareCommand("OBSERVE", args.as<JsonObjectConst>(), result.to<JsonObject>()));
-    assert(result["started"] == true);
-    clock_ms = 300; hardwarePoll();
+    const char* expected = cc_present || rfid_present ? "ready" : "error";
+    assert(std::string(hardwareHealth()) == expected);
+    assert(hardwareCommand("STATUS", args.as<JsonObjectConst>(), result.to<JsonObject>()));
+    assert(result["hardware"]["cc1101_spi"] == cc_present);
+    assert(result["hardware"]["rc522_spi"] == rfid_present);
+    for (const char* sensor : {"cc1101", "rfid"}) {
+        args["sensor"] = sensor; args["duration_ms"] = 1000;
+        result.clear();
+        assert(hardwareCommand("OBSERVE", args.as<JsonObjectConst>(), result.to<JsonObject>()));
+        bool available = std::string(sensor) == "cc1101" ? cc_present : rfid_present;
+        if (available) {
+            assert(result["started"] == true);
+            assert(std::string(hardwareHealth()) == "busy");
+            clock_ms += 300; hardwarePoll();
+        } else {
+            assert(!result.containsKey("started"));
+            std::string error = result["error"].as<const char*>();
+            assert(error.find(std::string(sensor) == "cc1101" ? "CC1101 unavailable" : "RC522 unavailable") != std::string::npos);
+            assert(std::string(hardwareHealth()) == expected);
+        }
+        hardwareStop();
+        assert(std::string(hardwareHealth()) == expected);
+    }
 }
 ''', encoding="utf-8")
     binary = folder / ("node-b-test.exe" if os.name == "nt" else "node-b-test")
@@ -318,5 +346,13 @@ int main() {
                     "-I", str(ROOT / "firmware/include"), str(folder / "main_b.cpp"),
                     str(ROOT / "firmware/src/node_b.cpp"), "-o", str(binary)],
                    check=True, capture_output=True, text=True, timeout=60)
-    result = subprocess.run([str(binary)], check=True, capture_output=True, text=True, timeout=5)
-    assert json.loads(result.stdout)["tag_seen"] is True
+    return binary
+
+
+@pytest.mark.parametrize("cc,rfid", [(True, True), (True, False), (False, True), (False, False)])
+def test_node_b_supports_independent_peripherals(node_b_binary, cc, rfid):
+    result = subprocess.run([str(node_b_binary), str(int(cc)), str(int(rfid))],
+                            check=True, capture_output=True, text=True, timeout=5)
+    events = [json.loads(line) for line in result.stdout.splitlines()]
+    assert any(e.get("sensor") == "cc1101" and "rssi_dbm" in e for e in events) is cc
+    assert any(e.get("tag_seen") is True for e in events) is rfid

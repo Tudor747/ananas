@@ -28,7 +28,10 @@ def describe_node(state):
         for key, label in (("nrf1_spi", "nRF radio 1"), ("nrf2_spi", "nRF radio 2"),
                            ("cc1101_spi", "CC1101 433 MHz"), ("rc522_spi", "RC522 RFID")):
             if key in hardware:
-                lines.append(f"{label}: " + ("SPI check passed" if hardware[key] is True else "SPI check failed"))
+                failure = "unavailable (missing or SPI check failed)" if role == "B" else "SPI check failed"
+                lines.append(f"{label}: " + ("SPI check passed" if hardware[key] is True else failure))
+        if role == "B" and any(hardware.get(key) is True for key in ("cc1101_spi", "rc522_spi")):
+            lines.append("ESP-B can operate with either peripheral. Use the features of the available module.")
         if state.get("health") == "error":
             if not hardware:
                 lines.append("This firmware gives no per-radio details. Update this board's matching firmware profile.")

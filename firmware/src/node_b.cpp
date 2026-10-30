@@ -14,7 +14,8 @@ static bool ccReady = false, rfidReady = false, active = false;
 static String sensor;
 static uint32_t until = 0, lastSample = 0;
 
-const char* hardwareHealth() { return active ? "busy" : (ccReady && rfidReady ? "ready" : "error"); }
+// Node B supports either peripheral on its own; individual checks remain visible.
+const char* hardwareHealth() { return active ? "busy" : (ccReady || rfidReady ? "ready" : "error"); }
 void hardwareStop() {
     if (ccReady) radio.standby();
     if (rfidReady) rfid.PCD_AntennaOff();
@@ -32,7 +33,10 @@ bool hardwareCommand(const char* cmd, JsonObjectConst args, JsonObject result) {
     if (duration < 100 || duration > 10000 || (chosen != "cc1101" && chosen != "rfid")) return false;
     if (active) { result["error"] = "busy; stop the current observation first"; return true; }
     if ((chosen == "cc1101" && !ccReady) || (chosen == "rfid" && !rfidReady)) {
-        result["error"] = "peripheral initialization failed"; return true;
+        result["error"] = chosen == "cc1101"
+            ? "CC1101 unavailable: missing or initialization failed; RFID can still be used if ready"
+            : "RC522 unavailable: missing or initialization failed; CC1101 can still be used if ready";
+        return true;
     }
     if (chosen == "cc1101") {
         int16_t status = radio.startReceive();
