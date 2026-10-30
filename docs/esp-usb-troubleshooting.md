@@ -15,16 +15,32 @@ and a fresh identification reports C, inspect their flashed profiles. The app
 must not silently rename that board to A.
 
 1. Stop other copies of the tablet app, web console and serial monitors.
-2. Connect **only the nRF board**. Use System → USB Setup → Find & connect.
-   Record its reported role and chip ID. If it reports B/C, verify and flash
-   `node_a` to that board's actual USB port; do not select B/C merely to bypass
-   the error. Disconnect it and identify the 433 MHz board the same way (B).
-3. Reconnect both boards and run Find & connect again. The app prefers stable
+2. Leave all boards connected. Use System → USB Setup → Find & connect.
+   Each USB port is identified independently; a timeout on the infrared board
+   does not discard successful identification of the nRF and 433 MHz boards.
+   Record reported roles, chip IDs and ports. A firmware mismatch must be
+   corrected on the verified physical board, not bypassed by selecting another role.
+3. The app prefers stable
    `/dev/serial/by-path/` names for bridges with duplicate USB serial numbers.
    `/dev/ttyUSB0` and `/dev/ttyUSB1` can swap after reconnection.
 4. Open Devices to distinguish **USB connected** from a peripheral SPI failure.
 
-For a text inspection on the Pi, stop the app first, then use its Python:
+For a text inspection on the Pi, stop the app first, leave all boards plugged
+in, then use its Python:
+
+```sh
+.venv-pi/bin/python -m pi_ot_probe.peripherals.provision --inspect-all
+```
+
+The report includes each USB port, firmware role, chip ID and available radio
+checks. Failed ports have their own error entries. No assignments are saved.
+Each probe has an eight-second HELLO window and a 25-second process limit to
+allow Python startup and USB opening on the Pi. A process timeout includes
+the last reported step; it does not establish the board's identity. Older ESP
+firmware may not provide individual radio checks. Close serial monitors and
+the web console too, so they do not compete for the ports.
+
+To inspect a specific endpoint instead:
 
 ```sh
 .venv-pi/bin/python -m pi_ot_probe.peripherals.provision --list

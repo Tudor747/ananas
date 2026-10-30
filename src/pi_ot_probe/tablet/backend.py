@@ -27,6 +27,7 @@ from pi_ot_probe.database.repository import Repository
 from pi_ot_probe.peripherals.manager import NodeManager, load_config, port_key, validate_configs
 from pi_ot_probe.peripherals.protocol import Command, NodeConfig
 from pi_ot_probe.peripherals.ports import serial_ports
+from pi_ot_probe.peripherals.provision import probe_port
 from pi_ot_probe.peripherals.store import EvidenceStore
 from .catalog import BY_KEY
 from .diagnostics import dependencies
@@ -440,16 +441,7 @@ class TabletBackend:
         self.manager.stop()
         try:
             self._check_cancelled()
-            result = subprocess.run([sys.executable, "-m", "pi_ot_probe.peripherals.provision",
-                                     "--node", role, "--port", port],
-                                    capture_output=True, text=True, timeout=12)
-            if result.returncode:
-                try:
-                    detail = json.loads(result.stdout)["error"]
-                except (ValueError, KeyError, TypeError):
-                    detail = (result.stdout + result.stderr).strip()[-1200:]
-                raise ValueError(detail)
-            identified = NodeConfig.model_validate(json.loads(result.stdout))
+            identified = NodeConfig.model_validate(probe_port(port, role))
             if identified.node != role or port_key(identified.port) != port_key(port):
                 raise ValueError("USB identity result does not match the selected role and port")
             current = [c for c in current if c.node != role] + [identified]
@@ -470,16 +462,7 @@ class TabletBackend:
         self.manager.stop()
 
         def probe(port):
-            result = subprocess.run([sys.executable, "-m", "pi_ot_probe.peripherals.provision",
-                                     "--node", "auto", "--port", port],
-                                    capture_output=True, text=True, timeout=15)
-            if result.returncode:
-                try:
-                    detail = json.loads(result.stdout)["error"]
-                except (ValueError, KeyError):
-                    detail = (result.stdout + result.stderr).strip()[-400:]
-                raise ValueError(detail)
-            config = NodeConfig.model_validate(json.loads(result.stdout))
+            config = NodeConfig.model_validate(probe_port(port))
             if port_key(config.port) != port_key(port):
                 raise ValueError("Identified USB port does not match the selected port")
             return config

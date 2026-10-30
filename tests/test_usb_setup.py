@@ -243,3 +243,60 @@ def test_unused_standby_does_not_touch_usb_on_shutdown(monkeypatch):
     standby = USBStandby(SimpleNamespace())
     standby.shutdown()
     assert calls == [] and not standby.thread.is_alive()
+
+
+def test_manual_timeout_reports_port_and_phase_without_changing_assignments(backend, monkeypatch):
+    before = backend.config_path.read_bytes()
+    def run(args, **kwargs):
+        raise subprocess.TimeoutExpired(args, kwargs["timeout"], stderr=b"Opening USB port usb-C\n")
+    monkeypatch.setattr(subprocess, "run", run)
+    with pytest.raises(ValueError, match="usb-C.*Last step: Opening USB port"):
+        backend.pair("C", "usb-C")
+    assert backend.config_path.read_bytes() == before
+    assert backend.manager.running
+
+
+def test_discovery_keeps_healthy_boards_when_one_port_hangs(backend, monkeypatch):
+    monkeypatch.setattr("pi_ot_probe.tablet.backend.serial_ports", lambda: [
+        {"port": "usb-A"}, {"port": "usb-B"}, {"port": "usb-C"}])
+    def run(args, **kwargs):
+        role = args[-1][-1]
+        if role == "C":
+            raise subprocess.TimeoutExpired(args, kwargs["timeout"], stderr=b"Waiting for firmware HELLO\n")
+        return subprocess.CompletedProcess(args, 0, json.dumps(
+            {"node": role, "device": f"chip-{role}", "port": args[-1]}))
+    monkeypatch.setattr(subprocess, "run", run)
+    result = backend.pair_all()
+    assert {c["node"] for c in result["connected"]} == {"A", "B"}
+    assert len(result["unidentified"]) == 1
+    assert "usb-C" in result["unidentified"][0]
+    assert "Waiting for firmware HELLO" in result["unidentified"][0]
+    assert backend.manager.running
+
+
+def test_inspect_all_reports_every_board_even_when_one_times_out(monkeypatch, capsys):
+    monkeypatch.setattr(ports, "serial_ports", lambda: [
+        {"port": "usb-A"}, {"port": "usb-B"}, {"port": "usb-C"}])
+    def run(args, **kwargs):
+        assert "--inspect" in args and "auto" in args
+        role = args[-1][-1]
+        if role == "C":
+            raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+        return subprocess.CompletedProcess(args, 0, json.dumps({
+            "node": role, "device": f"chip-{role}", "port": args[-1],
+            "health": "error" if role == "B" else "ready",
+            "hardware": {"cc1101_spi": True, "rc522_spi": False} if role == "B" else {}}))
+    monkeypatch.setattr(subprocess, "run", run)
+    monkeypatch.setattr("sys.argv", ["provision", "--inspect-all"])
+    assert provision.main() == 1
+    results = json.loads(capsys.readouterr().out)["ports"]
+    assert [p["port"] for p in results] == ["usb-A", "usb-B", "usb-C"]
+    assert results[1]["hardware"] == {"cc1101_spi": True, "rc522_spi": False}
+    assert "No board identity confirmed" in results[2]["error"]
+
+
+def test_inspect_all_no_usb_devices(monkeypatch, capsys):
+    monkeypatch.setattr(ports, "serial_ports", lambda: [])
+    monkeypatch.setattr("sys.argv", ["provision", "--inspect-all"])
+    assert provision.main() == 1
+    assert "No USB serial boards" in json.loads(capsys.readouterr().out)["error"]
